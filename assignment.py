@@ -3,13 +3,13 @@ import cv2 as cv
 import random
 import numpy as np
 import os
+import glob
 
 block_size = 1.0
 
 
 
 video_path = 'data/cam1/intrinsics.avi'
-frame_number = 10
 pattern_size = (8, 6)
 EDGE_SIZE = 115 # size of the square edge (in mm)
 auto_objectPoints = []
@@ -200,41 +200,41 @@ def signed_area(p):
 board_object_points = create_object_points(pattern_size[0], pattern_size[1],EDGE_SIZE)
 
 
+frame_number = 10
 cap = cv.VideoCapture(video_path)
 i = 0
 
 while i < frame_number:
-    ret_, img = cap.read()
+    ret_, frame = cap.read()
     
 
     #..
-
     i += 1
     #_, rvec, tvec = cv.solvePnP(board_object_points, corners, cameraMatrix, distCoeffs)
-
     #img = cv.imread(frame)
-    gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+    gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
 
     # Find the chess board corners
     ret, corners = cv.findChessboardCorners(gray, (pattern_size[0],pattern_size[1]), None)
 
     if ret == True:
+        print("Chessboard corners found in frame {}.".format(i))
+
         auto_objectPoints.append(board_object_points)
         corners2 = cv.cornerSubPix(gray, corners, (11,11), (-1,-1), criteria)
 
         auto_imagePoints.append(corners2)
 
         # Draw and display the corners
-        cv.drawChessboardCorners(img, (pattern_size[0],pattern_size[1]), corners2, ret)
-        cv.imshow('img', img)
+        cv.drawChessboardCorners(frame, (pattern_size[0],pattern_size[1]), corners2, ret)
+        cv.imshow('img', frame)
         cv.waitKey(500)
-
+        
 
     else:
         cv.imwrite('./manual_images/frame_{}.jpg'.format(i), frame)
 
-        
-    manual_images = './manual_images/frame_*.jpg'
+    manual_images = glob.glob('./manual_images/*.jpg')
 
     for fname in manual_images:
     
