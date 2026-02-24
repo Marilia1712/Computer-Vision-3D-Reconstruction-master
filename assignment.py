@@ -370,13 +370,19 @@ def calibrate_camera(cameraNumber):
 
                 cv.waitKey(0)
                 cv.destroyAllWindows()
+
+                if corners:
+                    return corners
+                return state["2dpoints"]
     
 
 board_object_points = create_object_points(pattern_size[0], pattern_size[1],EDGE_SIZE)
 
 
-#loop through the cameras to calibrate them (intrinsic parameters estimation)
+#1.1 loop through the cameras to calibrate them (intrinsic parameters estimation)
 for cameraNumber in range(1, 5):
+
+    corners = calibrate_camera(cameraNumber)
 
     # read image size 
     images = glob.glob(f'./images/cam{cameraNumber}/*.jpg')
@@ -386,9 +392,24 @@ for cameraNumber in range(1, 5):
     imagePoints  = auto_imagePoints[f"cam{cameraNumber}"]  + manual_imagePoints[f"cam{cameraNumber}"]
 
     ret, cameraMatrix, distCoeffs, rvecs, tvecs = cv.calibrateCamera(objectPoints, imagePoints, image_size, None, None, flags=0, criteria=criteria)
-    cameraMatrix[cameraNumber] = cameraMatrix
-    distCoeffs[cameraNumber] = distCoeffs
+    cameraMatrix[f"cam{cameraNumber}"] = cameraMatrix
+    distCoeffs[f"cam{cameraNumber}"] = distCoeffs
+
+    #1.3 save the intrinsic parameters in a text file for each camera
     with open(f'cam{cameraNumber}.txt', 'w') as f:
         f.write(f"Camera Matrix:\n{cameraMatrix}\n\nDistortion Coefficients:\n{distCoeffs}")
 
-        
+
+#1.2 estrinsic parameters --->> TODO: usare checkerboard.avi per gli estrinsics
+for cameraNumber in range(1, 5):
+
+    objp = create_object_points(pattern_size[0],pattern_size[1],EDGE_SIZE)
+    _, rvec, tvec = cv.solvePnP(objp, corners, cameraMatrix, distCoeffs)
+
+    """
+    #1.3 save the estrinsic parameters in a text file for each camera
+    with open(f'cam{cameraNumber}.txt', 'w') as f:
+        f.write(f"Rotation Vector:\n{rvec}\n\nTranslation Vector:\n{tvec}")
+    """
+
+
