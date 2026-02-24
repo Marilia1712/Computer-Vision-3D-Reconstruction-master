@@ -8,14 +8,48 @@ import shutil
 
 block_size = 1.0
 
-
-video_path = 'data/cam1/intrinsics.avi'
 pattern_size = (8, 6)
 EDGE_SIZE = 115 # size of the square edge (in mm)
-auto_objectPoints = []
-auto_imagePoints = []
-manual_objectPoints = []
-manual_imagePoints = []
+
+auto_objectPoints = {
+    "cam1": [],
+    "cam2": [],
+    "cam3": [],
+    "cam4": []
+}
+auto_imagePoints = {
+    "cam1": [],
+    "cam2": [],
+    "cam3": [],
+    "cam4": []
+}
+manual_objectPoints = {
+    "cam1": [],
+    "cam2": [],
+    "cam3": [],
+    "cam4": []
+}
+manual_imagePoints = {
+    "cam1": [],
+    "cam2": [],
+    "cam3": [],
+    "cam4": []
+}
+
+cameraMatrix = {
+    "cam1": None,
+    "cam2": None,
+    "cam3": None,
+    "cam4": None
+}
+
+distCoeffs = {
+    "cam1": None,
+    "cam2": None,
+    "cam3": None,
+    "cam4": None
+}
+
 criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
 top_left = (0,0)
 top_right = (pattern_size[0] - 1, 0)
@@ -206,152 +240,155 @@ def show_tvecs_rvecs(rvecs, tvecs):
         print(f"\nImage {i+1} extrinsic [R|t]:")
         print(extrinsic)
 
+
+def calibrate_camera(cameraNumber):
+
+    frame_number = 50
+    video_path = f'data/cam{cameraNumber}/intrinsics.avi'
+    cap = cv.VideoCapture(video_path)
+    video_length = int(cap.get(cv.CAP_PROP_FRAME_COUNT))
+    step = video_length // frame_number
+    i = 0
+
+    shutil.rmtree(f'./images/cam{cameraNumber}', ignore_errors=True)
+    os.makedirs(f'./images/cam{cameraNumber}')
+
+    while True:
+        ret_, frame = cap.read()
+        i += 1
+
+        if i % step == 0:
+
+            if i > video_length:
+                break
+
+            cv.imwrite(f'./images/cam{cameraNumber}/frame_{i}.jpg', frame)
+
+            gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
+
+            # Find the chess board corners
+            ret, corners = cv.findChessboardCorners(gray, (pattern_size[0],pattern_size[1]), None)
+
+            if ret == True:
+                print("Chessboard corners found in frame {}.".format(i))
+
+                auto_objectPoints[f"cam{cameraNumber}"].append(board_object_points)
+                corners2 = cv.cornerSubPix(gray, corners, (11,11), (-1,-1), criteria)
+
+                auto_imagePoints[f"cam{cameraNumber}"].append(corners2)
+
+                # Draw and display the corners
+                cv.drawChessboardCorners(frame, (pattern_size[0],pattern_size[1]), corners2, ret)
+                cv.imshow('img', frame)
+                cv.waitKey(500)
+                
+
+            else:
+                cv.imwrite(f'./manual_images/cam{cameraNumber}/frame_{i}.jpg', frame)
+
+            manual_images = glob.glob(f'./manual_images/cam{cameraNumber}/*.jpg')
+
+            for fname in manual_images:
+            
+                img = cv.imread(fname)
+                gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+
+                state = {
+                    "original": img.copy(),
+                    "base": img.copy(),
+                    "display": img.copy(),
+                    "interpolation": img.copy(),
+                    "2dpoints": [],
+                    "3dpoints": [],
+                    "filename": fname
+                }
+
+                cv.imshow('Image', state['display'])
+                cv.setMouseCallback("Image", select_corners, state)
+                
+                key = cv.waitKey(0)
+
+                if key == 27:
+                    print("Exit")
+                    cv.destroyAllWindows()
+                    print(state['2dpoints'])
+                    break
+
+                if key == ord('s'):
+                    print("Skipped image: ", fname)
+                    continue
+
+                if len(state['2dpoints']) != 4:
+                    print(f'This image was skipped : {fname}. Please select at least 4 points in the next one.')
+                    continue
+
+                src = np.array(state['2dpoints'], dtype=np.float32)
+
+                # --------------- Enforce order -----------------#
+
+                src = np.array(state['2dpoints'], dtype = np.float32)
+                ordered = order_points(src, pattern_size = pattern_size)
+                
+                ordered_ref = ordered.reshape(-1, 1, 2).astype(np.float32)
+                cv.cornerSubPix(gray, ordered_ref, (11,11), (-1,-1), criteria)
+                ordered_refined = ordered_ref.reshape(4, 2)
+
+                #dst = np.float32([[0, 0], [W-1, 0], [W-1, H-1], [0, H-1]]) # the corners
+                dst = np.float32([
+                    top_left,
+                    top_right,
+                    bottom_right,
+                    bottom_left
+                ])
+                W = (pattern_size[0] - 1) * 100
+                H = (pattern_size[1] - 1) * 100
+                
+                #warping for better corner estimation
+                H_warp = cv.getPerspectiveTransform(ordered_refined, dst)
+                warped = cv.warpPerspective(img, H_warp, (W, H))
+                gray_warped = cv.cvtColor(warped, cv.COLOR_BGR2GRAY)
+
+                # interpolation
+                warped_grid = interpolate_corners(dst, pattern_size[0], pattern_size[1])
+                warped_grid = warped_grid.reshape(-1, 1, 2).astype(np.float32)
+
+                # inverse warping to go back to original image
+                H_inv = cv.getPerspectiveTransform(dst, ordered_refined)
+                img_grid = cv.perspectiveTransform(warped_grid, H_inv)
+
+                img_points = img_grid.reshape(-1, 2)
+                manual_imagePoints[f"cam{cameraNumber}"].append(img_points)
+                manual_objectPoints[f"cam{cameraNumber}"].append(board_object_points.copy())
+
+                for pt in img_grid:
+                    x, y = pt[0]
+                    cv.circle(state['interpolation'], (int(x), int(y)), 5, (255, 0, 0), -1)
+
+                cv.imshow('Image', state["interpolation"])
+                new_path = os.path.join("new_images", os.path.basename(fname))
+                cv.imwrite(new_path, state["interpolation"])
+
+                cv.waitKey(0)
+                cv.destroyAllWindows()
+    
+
 board_object_points = create_object_points(pattern_size[0], pattern_size[1],EDGE_SIZE)
 
 
-frame_number = 50
-cap = cv.VideoCapture(video_path)
-video_length = int(cap.get(cv.CAP_PROP_FRAME_COUNT))
-step = video_length // frame_number
-i = 0
+#loop through the cameras to calibrate them (intrinsic parameters estimation)
+for cameraNumber in range(1, 5):
 
-shutil.rmtree('./images', ignore_errors=True)
-os.makedirs('./images')
+    # read image size 
+    images = glob.glob(f'./images/cam{cameraNumber}/*.jpg')
+    image_size = (cv.imread(images[0]).shape[1], cv.imread(images[0]).shape[0]) 
+    #Run images
+    objectPoints = auto_objectPoints[f"cam{cameraNumber}"] + manual_objectPoints[f"cam{cameraNumber}"]
+    imagePoints  = auto_imagePoints[f"cam{cameraNumber}"]  + manual_imagePoints[f"cam{cameraNumber}"]
 
-while True:
-    ret_, frame = cap.read()
-    i += 1
+    ret, cameraMatrix, distCoeffs, rvecs, tvecs = cv.calibrateCamera(objectPoints, imagePoints, image_size, None, None, flags=0, criteria=criteria)
+    cameraMatrix[cameraNumber] = cameraMatrix
+    distCoeffs[cameraNumber] = distCoeffs
+    with open(f'cam{cameraNumber}.txt', 'w') as f:
+        f.write(f"Camera Matrix:\n{cameraMatrix}\n\nDistortion Coefficients:\n{distCoeffs}")
 
-    if i % step == 0:
-
-        if i > video_length:
-            break
-
-        cv.imwrite('./images/frame_{}.jpg'.format(i), frame)
-
-        gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
-
-        # Find the chess board corners
-        ret, corners = cv.findChessboardCorners(gray, (pattern_size[0],pattern_size[1]), None)
-
-        if ret == True:
-            print("Chessboard corners found in frame {}.".format(i))
-
-            auto_objectPoints.append(board_object_points)
-            corners2 = cv.cornerSubPix(gray, corners, (11,11), (-1,-1), criteria)
-
-            auto_imagePoints.append(corners2)
-
-            # Draw and display the corners
-            cv.drawChessboardCorners(frame, (pattern_size[0],pattern_size[1]), corners2, ret)
-            cv.imshow('img', frame)
-            cv.waitKey(500)
-            
-
-        else:
-            cv.imwrite('./manual_images/frame_{}.jpg'.format(i), frame)
-
-        manual_images = glob.glob('./manual_images/*.jpg')
-
-        for fname in manual_images:
         
-            img = cv.imread(fname)
-            gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
-
-            state = {
-                "original": img.copy(),
-                "base": img.copy(),
-                "display": img.copy(),
-                "interpolation": img.copy(),
-                "2dpoints": [],
-                "3dpoints": [],
-                "filename": fname
-            }
-
-            cv.imshow('Image', state['display'])
-            cv.setMouseCallback("Image", select_corners, state)
-            
-            key = cv.waitKey(0)
-
-            if key == 27:
-                print("Exit")
-                cv.destroyAllWindows()
-                print(state['2dpoints'])
-                break
-
-            if key == ord('s'):
-                print("Skipped image: ", fname)
-                continue
-
-            if len(state['2dpoints']) != 4:
-                print(f'This image was skipped : {fname}. Please select at least 4 points in the next one.')
-                continue
-
-            src = np.array(state['2dpoints'], dtype=np.float32)
-
-            # --------------- Enforce order -----------------#
-
-            src = np.array(state['2dpoints'], dtype = np.float32)
-            ordered = order_points(src, pattern_size = pattern_size)
-            
-            ordered_ref = ordered.reshape(-1, 1, 2).astype(np.float32)
-            cv.cornerSubPix(gray, ordered_ref, (11,11), (-1,-1), criteria)
-            ordered_refined = ordered_ref.reshape(4, 2)
-
-            #dst = np.float32([[0, 0], [W-1, 0], [W-1, H-1], [0, H-1]]) # the corners
-            dst = np.float32([
-                top_left,
-                top_right,
-                bottom_right,
-                bottom_left
-            ])
-            W = (pattern_size[0] - 1) * 100
-            H = (pattern_size[1] - 1) * 100
-            
-            #warping for better corner estimation
-            H_warp = cv.getPerspectiveTransform(ordered_refined, dst)
-            warped = cv.warpPerspective(img, H_warp, (W, H))
-            gray_warped = cv.cvtColor(warped, cv.COLOR_BGR2GRAY)
-
-            # interpolation
-            warped_grid = interpolate_corners(dst, pattern_size[0], pattern_size[1])
-            warped_grid = warped_grid.reshape(-1, 1, 2).astype(np.float32)
-
-            # inverse warping to go back to original image
-            H_inv = cv.getPerspectiveTransform(dst, ordered_refined)
-            img_grid = cv.perspectiveTransform(warped_grid, H_inv)
-
-            img_points = img_grid.reshape(-1, 2)
-            manual_imagePoints.append(img_points)
-            manual_objectPoints.append(board_object_points.copy())
-
-            for pt in img_grid:
-                x, y = pt[0]
-                cv.circle(state['interpolation'], (int(x), int(y)), 5, (255, 0, 0), -1)
-
-            cv.imshow('Image', state["interpolation"])
-            new_path = os.path.join("new_images", os.path.basename(fname))
-            cv.imwrite(new_path, state["interpolation"])
-
-            cv.waitKey(0)
-            cv.destroyAllWindows()
-
-
-# read image size 
-images = glob.glob('./images/*.jpg')
-image_size = (cv.imread(images[0]).shape[1], cv.imread(images[0]).shape[0]) 
-
-#Run images
-objectPoints_run1 = auto_objectPoints + manual_objectPoints
-imagePoints_run1  = auto_imagePoints  + manual_imagePoints
-
-
-#manteniamo "1" perchè poi estendiamo logica alle 4 camere
-ret, cameraMatrix1, distCoeffs1, rvecs1, tvecs1 = cv.calibrateCamera(objectPoints_run1, imagePoints_run1, image_size, None, None, flags=0, criteria=criteria)
-"""
-print("############ RESULTS OF RUN 1 ############\n")
-print("Intrinsic Parameters : Camera matrix K:\n", cameraMatrix1)
-print("Extrinsic Parameters : [R|t] for each image:")
-show_tvecs_rvecs(rvecs1, tvecs1)
-print("##########################################\n")
-"""
