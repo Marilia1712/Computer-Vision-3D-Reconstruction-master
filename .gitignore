@@ -126,6 +126,12 @@ venv.bak/
 # mypy
 .mypy_cache/
 .dmypy.json
+
+
+# test images
+.png
+.jpg
+.jpeg
 dmypy.json
 
 # Pyre type checker
