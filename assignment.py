@@ -36,14 +36,14 @@ manual_imagePoints = {
     "cam4": []
 }
 
-cameraMatrix = {
+camera_matrix = {
     "cam1": None,
     "cam2": None,
     "cam3": None,
     "cam4": None
 }
 
-distCoeffs = {
+dist_coeffs = {
     "cam1": None,
     "cam2": None,
     "cam3": None,
@@ -240,29 +240,52 @@ def show_tvecs_rvecs(rvecs, tvecs):
         print(f"\nImage {i+1} extrinsic [R|t]:")
         print(extrinsic)
 
+def reproj_error(objp, imgp, rvec, tvec, K, dist):
+    proj, _ = cv.projectPoints(objp, rvec, tvec, K, dist)
+    return np.mean(np.linalg.norm(proj.reshape(-1,2) - imgp.reshape(-1,2), axis=1))
 
-def calibrate_camera(cameraNumber):
+def save_camera_config_xml(filename, K, dist, rvec=None, tvec=None):
+    fs = cv.FileStorage(filename, cv.FILE_STORAGE_WRITE)
 
-    frame_number = 50
-    video_path = f'data/cam{cameraNumber}/intrinsics.avi'
+    fs.write("CameraMatrix", K.astype(np.float32))
+    fs.write("DistortionCoeffs", dist.astype(np.float32))
+
+    if rvec is not None:
+        fs.write("rvec", rvec.astype(np.float32))
+    if tvec is not None:
+        fs.write("tvec", tvec.astype(np.float32))
+
+    fs.release()
+
+def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number = 50):
+
+    #video_path = f'data/cam{cameraNumber}/intrinsics.avi'
     cap = cv.VideoCapture(video_path)
+
+    manual_images = glob.glob(f'{dest_manual}/*.jpg')
     video_length = int(cap.get(cv.CAP_PROP_FRAME_COUNT))
     step = video_length // frame_number
     i = 0
+    crns = {}
 
-    shutil.rmtree(f'./images/cam{cameraNumber}', ignore_errors=True)
-    os.makedirs(f'./images/cam{cameraNumber}')
+    shutil.rmtree(dest, ignore_errors=True)
+    shutil.rmtree(dest_manual, ignore_errors=True)
+    os.makedirs(dest_manual)
+    os.makedirs(dest)
 
     while True:
         ret_, frame = cap.read()
+        if not ret_:
+            break
         i += 1
+
 
         if i % step == 0:
 
             if i > video_length:
                 break
 
-            cv.imwrite(f'./images/cam{cameraNumber}/frame_{i}.jpg', frame)
+            cv.imwrite(f'{dest}/frame_{i}_{video_path[10:-5]}.jpg', frame)
 
             gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
 
@@ -281,17 +304,14 @@ def calibrate_camera(cameraNumber):
                 cv.drawChessboardCorners(frame, (pattern_size[0],pattern_size[1]), corners2, ret)
                 cv.imshow('img', frame)
                 cv.waitKey(500)
+                crns[f"frame_{i}_{video_path[10:-5]}"] = corners2
                 
-
             else:
-                cv.imwrite(f'./manual_images/cam{cameraNumber}/frame_{i}.jpg', frame)
-
-            manual_images = glob.glob(f'./manual_images/cam{cameraNumber}/*.jpg')
-
-            for fname in manual_images:
+                #cv.imwrite(f'{dest_manual}/frame_{i}_{video_path[11:-5]}.jpg', frame)
             
-                img = cv.imread(fname)
+                img = frame.copy()
                 gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
+                fname = f'frame_{i}_{video_path[11:-5]}.jpg'
 
                 state = {
                     "original": img.copy(),
@@ -370,19 +390,20 @@ def calibrate_camera(cameraNumber):
 
                 cv.waitKey(0)
                 cv.destroyAllWindows()
+                crns[f'frame_{i}_{video_path[10:-5]}'] = img_points.reshape(-1,1,2)
 
-                if corners:
-                    return corners
-                return state["2dpoints"]
-    
-
-board_object_points = create_object_points(pattern_size[0], pattern_size[1],EDGE_SIZE)
-
+    print(crns)
+    return crns
+        
+board_object_points = create_object_points(pattern_size[0], pattern_size[1], EDGE_SIZE)
 
 #1.1 loop through the cameras to calibrate them (intrinsic parameters estimation)
 for cameraNumber in range(1, 5):
 
-    corners = calibrate_camera(cameraNumber)
+    dest_man = f'./manual_images/cam{cameraNumber}'
+    dest = f'./images/cam{cameraNumber}'
+    video_path = f'data/cam{cameraNumber}/intrinsics.avi'
+    crns = calibrate_camera(cameraNumber, video_path, dest, dest_man)
 
     # read image size 
     images = glob.glob(f'./images/cam{cameraNumber}/*.jpg')
@@ -392,24 +413,50 @@ for cameraNumber in range(1, 5):
     imagePoints  = auto_imagePoints[f"cam{cameraNumber}"]  + manual_imagePoints[f"cam{cameraNumber}"]
 
     ret, cameraMatrix, distCoeffs, rvecs, tvecs = cv.calibrateCamera(objectPoints, imagePoints, image_size, None, None, flags=0, criteria=criteria)
-    cameraMatrix[f"cam{cameraNumber}"] = cameraMatrix
-    distCoeffs[f"cam{cameraNumber}"] = distCoeffs
+    camera_matrix[f"cam{cameraNumber}"] = cameraMatrix
+    dist_coeffs[f"cam{cameraNumber}"] = distCoeffs
 
     #1.3 save the intrinsic parameters in a text file for each camera
     with open(f'cam{cameraNumber}.txt', 'w') as f:
-        f.write(f"Camera Matrix:\n{cameraMatrix}\n\nDistortion Coefficients:\n{distCoeffs}")
+        f.write(f"Camera Matrix:\n{camera_matrix[f'cam{cameraNumber}']}\n\nDistortion Coefficients:\n{dist_coeffs[f'cam{cameraNumber}']}")
 
 
-#1.2 estrinsic parameters --->> TODO: usare checkerboard.avi per gli estrinsics
+# #1.2 estrinsic parameters --->> TODO: usare checkerboard.avi per gli estrinsics
 for cameraNumber in range(1, 5):
-
+    extrinsic_path = f'data/cam{cameraNumber}/checkerboard.avi'
+    dest_man = f'./manual_images/cam{cameraNumber}_ext'
+    dest = f'./images/cam{cameraNumber}_ext'
+    crns = calibrate_camera(cameraNumber, extrinsic_path, dest, dest_man)
+    #crns = calibrate_camera(cameraNumber, extrinsic_path, dest, dest_man)
+    K = camera_matrix[f"cam{cameraNumber}"]
+    dist = dist_coeffs[f"cam{cameraNumber}"]
+    save_camera_config_xml(f"cam{cameraNumber}_intrinsics.xml", K, dist)
     objp = create_object_points(pattern_size[0],pattern_size[1],EDGE_SIZE)
-    _, rvec, tvec = cv.solvePnP(objp, corners, cameraMatrix, distCoeffs)
+
+    best = None
+    for key, corners in crns.items():
+        ok, rvec, tvec = cv.solvePnP(objp, corners, K, dist)
+        if not ok:
+            continue
+        proj, _ = cv.projectPoints(objp, rvec, tvec, K, dist)
+        err = np.mean(np.linalg.norm(proj.reshape(-1,2) - corners.reshape(-1,2), axis=1))
+        if best is None or err < best[0]:
+            best = (err, key, rvec, tvec)
+    if best is None:
+        print(f"cam{cameraNumber}: no valid PnP solution (no detected / manual corners).")
+        continue
+
+
+    err, key, rvec, tvec = best
+    print(f"cam{cameraNumber}: Using {key}, reproj err={err:.3f}px")
+    print("rvec:\n", rvec)
+    print("tvec:\n", tvec)
+    save_camera_config_xml(f"cam{cameraNumber}_config.xml", K, dist, rvec, tvec)
 
     """
     #1.3 save the estrinsic parameters in a text file for each camera
     with open(f'cam{cameraNumber}.txt', 'w') as f:
         f.write(f"Rotation Vector:\n{rvec}\n\nTranslation Vector:\n{tvec}")
-    """
+#     """
 
 
