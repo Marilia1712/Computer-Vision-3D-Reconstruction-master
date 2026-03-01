@@ -220,7 +220,7 @@ def generate_voxel_grid(width, height, depth):
     for x in range(width):
         for y in range(height):
             for z in range(depth):
-                grid_data.append([x*block_size - width/2, y*block_size - height/2, -block_size, z*block_size - depth/2])
+                grid_data.append([x*block_size - width/2, y*block_size - height/2, z*block_size - depth/2])
                 colors.append([1.0, 1.0, 1.0] if (x+y+z) % 3 == 0 else [0, 0, 0])
     return grid_data, colors
 
@@ -229,11 +229,11 @@ def set_voxel_positions(width, height, depth):
     """
     Calculate proper voxel arrays
     """
-    
+
     data, colors = [], []
     frames = []
 
-
+    #for each frame...
     for f in frames:
         # 1 define a 3d voxel grid
             grid_data, colors = generate_voxel_grid(width, height, depth)
@@ -242,7 +242,18 @@ def set_voxel_positions(width, height, depth):
             #use calibrate camera parameters (and functions)
             #compute pixel coordinates for voxel in each camera
 
+            #for each voxel...
+            projected_pixels = {1: [], 2: [], 3: [], 4: []}
 
+            for voxel in grid_data:
+                #for each camera...
+                for cam in range(1,5):
+                    #use calibrate camera parameters...
+                    camera_matrix, dist, rvec, tvec = params[f'cam{cam}']
+                    #compute pixel coordinates (project voxel-> pixel(u,v))
+                    projected_pixel, _ = cv.projectPoints(voxel, rvec, tvec, camera_matrix, dist)
+                    projected_pixels[cam].append(projected_pixel[0][0])
+                            
         # 3 check visibility against silhouttes
             #for each camera check if projected pixel lies inside the foreground mask
             #if its not in all four camera masks, discard it
