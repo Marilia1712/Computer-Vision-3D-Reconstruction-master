@@ -152,6 +152,7 @@ def background_subtraction(video_path, background, kernel, k = 3):
     return foreground_mask
 
 
+"""
 #loop to get background subtraction for each camera
 
 for i in range(1,5):
@@ -161,6 +162,8 @@ for i in range(1,5):
 
     background = background_detection(video_path_back)
     foreground = background_subtraction(video_path_fore, background, kernel)
+
+"""
 
 """
 Exercise 3
@@ -230,34 +233,56 @@ def set_voxel_positions(width, height, depth):
     Calculate proper voxel arrays
     """
 
-    data, colors = [], []
+    colors = [] #TODO: do we need to do anything about the colors?
     frames = []
+    background = {1: [], 2: [], 3: [], 4: []}
+    foreground = {1: [], 2: [], 3: [], 4: []}
+    active_voxels = {1: [], 2: [], 3: [], 4: []}
+    final_voxel = []
+
+    #for each camera get background subtraction
+    for i in range(1,5):
+                video_path_back = f"data/cam{i}/background.avi"
+                video_path_fore = f"data/cam{i}/video.avi"
+                kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE,(3,3))
+
+                background[i] = background_detection(video_path_back)
+                foreground[i] = background_subtraction(video_path_fore, background[i], kernel)
 
     #for each frame...
+    frames = [1, 2, 3, 4] #TODO: get frames from videos
     for f in frames:
         # 1 define a 3d voxel grid
-            grid_data, colors = generate_voxel_grid(width, height, depth)
+            grid_data, _ = generate_voxel_grid(width, height, depth)
            
         # 2 project the 3d voxel grid to each camera view
-            #use calibrate camera parameters (and functions)
-            #compute pixel coordinates for voxel in each camera
-
             #for each voxel...
             projected_pixels = {1: [], 2: [], 3: [], 4: []}
 
+            #for each voxel in the grid...
             for voxel in grid_data:
+
+                keep = True
+
                 #for each camera...
                 for cam in range(1,5):
                     #use calibrate camera parameters...
                     camera_matrix, dist, rvec, tvec = params[f'cam{cam}']
                     #compute pixel coordinates (project voxel-> pixel(u,v))
                     projected_pixel, _ = cv.projectPoints(voxel, rvec, tvec, camera_matrix, dist)
-                    projected_pixels[cam].append(projected_pixel[0][0])
+                    u, v = int(round(projected_pixel[0][0][0])), int(round(projected_pixel[0][0][1]))
                             
-        # 3 check visibility against silhouttes
-            #for each camera check if projected pixel lies inside the foreground mask
-            #if its not in all four camera masks, discard it
+                    # 3 check if projected pixel lies inside the foreground mask
+                    mask = foreground[cam][f]
+                    if not (0 <= u < mask.shape[1] and 0 <= v < mask.shape[0]) or mask[v,u] == 0: # not only if its active, must address issues of Out Of Bounds
+                        keep = False
+                        break
+                    if keep:
+                        active_voxels[cam].append(voxel)
 
-        # 4 collect all voxels
-    
-    return data, colors
+            # 4 collect all voxels that are active in all camera views
+            if keep:
+                final_voxel.append(voxel)
+
+    return final_voxel, colors
+
