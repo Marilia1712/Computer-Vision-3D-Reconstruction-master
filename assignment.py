@@ -1,3 +1,5 @@
+from turtle import width
+
 import glm
 import cv2 as cv
 import random
@@ -47,19 +49,6 @@ def get_cam_rotation_matrices():
         cam_rot_list.append(mat4)
     
     return cam_rot_list
-
-
-def set_voxel_positions(width, height, depth):
-    # Generates random voxel locations
-    # TODO: You need to calculate proper voxel arrays instead of random ones.
-    data, colors = [], []
-    for x in range(width):
-        for y in range(height):
-            for z in range(depth):
-                if random.randint(0, 1000) < 5:
-                    data.append([x*block_size - width/2, y*block_size, z*block_size - depth/2])
-                    colors.append([x / width, z / depth, y / height])
-    return data, colors
 
 
 """
@@ -220,3 +209,44 @@ for i in range(1, 5):
 
     #Store params for each camera
     params[f'cam{i}'] = [camera_matrix, dist, rvec, tvec]
+
+
+def generate_voxel_grid(width, height, depth):
+    """
+    Generates a 3D voxel grid in the room
+    Same logic as generate_grid but with 3D coordinates
+    """
+    grid_data, colors = []
+    for x in range(width):
+        for y in range(height):
+            for z in range(depth):
+                grid_data.append([x*block_size - width/2, y*block_size - height/2, -block_size, z*block_size - depth/2])
+                colors.append([1.0, 1.0, 1.0] if (x+y+z) % 3 == 0 else [0, 0, 0])
+    return grid_data, colors
+
+
+def set_voxel_positions(width, height, depth):
+    """
+    Calculate proper voxel arrays
+    """
+    
+    data, colors = [], []
+    frames = []
+
+
+    for f in frames:
+        # 1 define a 3d voxel grid
+            grid_data, colors = generate_voxel_grid(width, height, depth)
+           
+        # 2 project the 3d voxel grid to each camera view
+            #use calibrate camera parameters (and functions)
+            #compute pixel coordinates for voxel in each camera
+
+
+        # 3 check visibility against silhouttes
+            #for each camera check if projected pixel lies inside the foreground mask
+            #if its not in all four camera masks, discard it
+
+        # 4 collect all voxels
+    
+    return data, colors
