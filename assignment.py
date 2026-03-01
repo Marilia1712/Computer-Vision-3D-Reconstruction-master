@@ -286,3 +286,18 @@ def set_voxel_positions(width, height, depth):
 
     return final_voxel, colors
 
+
+"""
+Referencing image: https://uu.brightspace.com/content/enforced/44949-BETA--2025--3-GS--INFOMCV--V/csfiles/home_dir/courses/BETA-2023-3-GS-INFOMCV-V/BETA-2023-3-GS-INFOMCV-V/flow.png
+
+-   Now we have a function to get a set of voxels visible in all cameras (active voxels).
+    (TODO: for now it loops through 4 sample frames but it should be adapted to loop through all frames in the video)
+
+-   NOTE: when choosing the parameters to call the function, choose them wisely so that the voxels are positioned nicely (not too small/big, etc.)
+    This was something Mr.Boobs stressed on in the lecture
+
+-   The output of the function is a set of voxels that are active in all camera views, which can be used for 3D reconstruction or visualization.
+
+-   TODO: we need to give the 3d array of turned on voxels to the visualization code
+
+"""
