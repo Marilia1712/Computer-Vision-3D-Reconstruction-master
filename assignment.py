@@ -226,6 +226,26 @@ def generate_voxel_grid():
     return voxels
 
 
+
+def create_lookup_table(voxels, cam_params):
+    """
+    create the lookup-table for the valid voxel back-projections onto each of the camera's FoVs.
+    """
+
+    lut = {1: {}, 2: {}, 3: {}, 4: {}}
+
+    # position in R3 -> projection in R2 for each camera
+    for i in range(1,5):
+        camera_matrix, dist, rvec, tvec = cam_params[f'cam{i}']
+        for voxel in voxels:
+            projected_pixel, _ = cv.projectPoints(voxel, rvec, tvec, camera_matrix, dist)
+            u, v = int(round(projected_pixel[0][0][0])), int(round(projected_pixel[0][0][1]))
+            lut[i][tuple(voxel)] = (u,v)
+
+    return lut
+
+
+
 def set_voxel_positions(width, height, depth):
     """
     Calculate proper voxel arrays
@@ -257,15 +277,15 @@ def set_voxel_positions(width, height, depth):
                 background[i] = background_detection(video_path_back)
                 foreground[i] = background_subtraction(video_path_fore, background[i], kernel)
 
+    # 1 define a 3d voxel grid
+    voxels = generate_voxel_grid()
+    # 2 project the 3d voxel grid to each camera view
+    lut = create_lookup_table(voxels, params)
 
     #for each frame...
     frames = min(len(foreground[1]), len(foreground[2]), len(foreground[3]), len(foreground[4]))
 
     for f in range(frames):
-        # 1 define a 3d voxel grid
-            voxels = generate_voxel_grid()
-           
-        # 2 project the 3d voxel grid to each camera view
 
             #for each voxel in the grid...
             for voxel in voxels:
@@ -274,11 +294,8 @@ def set_voxel_positions(width, height, depth):
 
                 #for each camera...
                 for cam in range(1,5):
-                    #use calibrate camera parameters...
-                    camera_matrix, dist, rvec, tvec = params[f'cam{cam}']
-                    #compute pixel coordinates (project voxel-> pixel(u,v))
-                    projected_pixel, _ = cv.projectPoints(voxel, rvec, tvec, camera_matrix, dist)
-                    u, v = int(round(projected_pixel[0][0][0])), int(round(projected_pixel[0][0][1]))
+                    
+                    u, v = lut[cam][tuple(voxel)]
                             
                     # 3 check if projected pixel lies inside the foreground mask
                     mask = foreground[cam][f]
