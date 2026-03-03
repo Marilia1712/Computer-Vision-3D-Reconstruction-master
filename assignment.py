@@ -9,7 +9,7 @@ import glob
 import shutil
 
 
-block_size = 10
+block_size = 1.0
 def generate_grid(width, depth):
     # Generates the floor grid locations
     # You don't need to edit this function
@@ -203,18 +203,27 @@ for i in range(1, 5):
     params[f'cam{i}'] = [camera_matrix, dist, rvec, tvec]
 
 
-def generate_voxel_grid(width, height, depth):
+def generate_voxel_grid():
+
     """
-    Generates a 3D voxel grid in the room
-    Same logic as generate_grid but with 3D coordinates
+    Create a (full) voxel grid in the world
     """
-    grid_data, colors = []
-    for x in range(width):
-        for y in range(height):
-            for z in range(depth):
-                grid_data.append([x*block_size - width/2, y*block_size - height/2, z*block_size - depth/2])
-                colors.append([1.0, 1.0, 1.0] if (x+y+z) % 3 == 0 else [0, 0, 0])
-    return grid_data, colors
+
+    voxel_dim = 1  # cm
+
+    # empirical values
+    ranges = [
+        (-60, 80),    # x
+        (-30, 100),   # y
+        (-200, 200)   # z
+    ]
+
+    axes = [np.arange(lo, hi, voxel_dim, dtype=np.float32) for lo, hi in ranges]
+
+    grid = np.meshgrid(*axes, indexing='ij')
+    voxels = np.stack([g.ravel() for g in grid], axis=1)
+
+    return voxels
 
 
 def set_voxel_positions(width, height, depth):
@@ -227,7 +236,17 @@ def set_voxel_positions(width, height, depth):
     background = {1: [], 2: [], 3: [], 4: []}
     foreground = {1: [], 2: [], 3: [], 4: []}
     active_voxels = {1: [], 2: [], 3: [], 4: []}
-    final_voxel = []
+    final_voxel, data = [], []
+
+
+
+    data, colors = [], []
+    for x in range(width):
+        for y in range(height):
+            for z in range(depth):
+                if random.randint(0, 1000) < 5:
+                    data.append([x*block_size - width/2, y*block_size, z*block_size - depth/2])
+                    colors.append([x / width, z / depth, y / height])
 
     #for each camera get background subtraction
     for i in range(1,5):
@@ -238,18 +257,18 @@ def set_voxel_positions(width, height, depth):
                 background[i] = background_detection(video_path_back)
                 foreground[i] = background_subtraction(video_path_fore, background[i], kernel)
 
+
     #for each frame...
-    frames = [1, 2, 3, 4] #TODO: get frames from videos
-    for f in frames:
+    frames = min(len(foreground[1]), len(foreground[2]), len(foreground[3]), len(foreground[4]))
+
+    for f in range(frames):
         # 1 define a 3d voxel grid
-            grid_data, _ = generate_voxel_grid(width, height, depth)
+            voxels = generate_voxel_grid()
            
         # 2 project the 3d voxel grid to each camera view
-            #for each voxel...
-            projected_pixels = {1: [], 2: [], 3: [], 4: []}
 
             #for each voxel in the grid...
-            for voxel in grid_data:
+            for voxel in voxels:
 
                 keep = True
 
@@ -273,7 +292,12 @@ def set_voxel_positions(width, height, depth):
             if keep:
                 final_voxel.append(voxel)
 
-    return final_voxel, colors
+    data = [[voxel[0], -voxel[2], -voxel[1]] for voxel in final_voxel]
+
+    for i in range(len(data)):
+        colors.append([1.0, 1.0, 1.0])
+
+    return data, colors
 
 
 """
