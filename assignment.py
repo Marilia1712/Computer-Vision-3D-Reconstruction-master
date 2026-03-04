@@ -205,7 +205,9 @@ def interpolate_corners(points, cols, rows):
     img_grid = cv.perspectiveTransform(all_points.reshape(cols*rows, 1, 2), H)
     return img_grid
 
-
+"""
+#################################################################################################################################
+"""
 """
     Task 1 + Choice Task 7: (improved) calibration
 """
@@ -257,7 +259,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 h, w = gray.shape
 
                 # ==============================
-                # 1. Coverage check
+                # 1. Coverage check                 -> TODO: move this to underneath the three cases
                 # ==============================
                 xs = corners2[:,0,0]
                 ys = corners2[:,0,1]
@@ -271,20 +273,8 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                     print("  ❌ Rejected: poor spatial coverage")
                     continue
 
-                """
                 # ==============================
-                # 2. Corner stability check
-                # ==============================
-                movement = np.mean(np.linalg.norm(corners2 - corners, axis=2))
-                print(f"  refinement movement = {movement:.3f}px")
-
-                if movement > 0.5:
-                    print("  ❌ Rejected: unstable/blurred corners")
-                    continue
-                """
-
-                # ==============================
-                # 3. Board area check
+                # 2. Board area check
                 # ==============================
                 
                 area = cv.contourArea(corners2.reshape(-1,2))
@@ -318,7 +308,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 cv.waitKey(500)
                 crns[f"frame_{i}_{video_path[10:-5]}"] = corners2
 
-            # partial localization of corners -> convex hull technique
+            # case 2: partial localization of corners -> Convex Hull technique (Choice task 1)
             elif corners is not None and len(corners) >= MIN_POINTS:
 
                 pts = corners.reshape(-1,2).astype(np.float32)
@@ -330,7 +320,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 # enforce order
                 ordered = order_points(src, pattern_size = pattern_size)
                 ordered_ref = ordered.reshape(-1, 1, 2).astype(np.float32)
-                cv.cornerSubPix(gray, ordered_ref, (11,11), (-1,-1), criteria)
+                #cv.cornerSubPix(gray, ordered_ref, (11,11), (-1,-1), criteria)
                 ordered_refined = ordered_ref.reshape(4, 2)
 
                 dst = np.float32([
@@ -358,9 +348,28 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 img_points = img_grid.reshape(-1, 2)
                 print("Using convex hull fallback")
 
+                # --- Visualization for convex hull fallback ---
+                frame_hull = frame.copy()
+
+                # draw convex hull in green
+                cv.polylines(frame_hull, [hull.astype(np.int32)], isClosed=True, color=(0,255,0), thickness=2)
+
+                # draw minAreaRect rectangle in red
+                rect_pts = box.astype(np.int32)
+                cv.polylines(frame_hull, [rect_pts], isClosed=True, color=(0,0,255), thickness=2)
+
+                # draw the 4 ordered points in blue
+                for (x, y) in ordered_refined:
+                    cv.circle(frame_hull, (int(x), int(y)), 5, (255,0,0), -1)
+
+                cv.putText(frame_hull, f"Convex Hull Fallback - Frame {i}", (10,30),
+                        cv.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
+
+                cv.imshow("Convex Hull Visualization", frame_hull)
+                cv.waitKey(5000)  # show for 500 ms, adjust as needed
+
+            # case 3: insufficient/absent localization of corners -> manual input
             else:
-                #cv.imwrite(f'{dest_manual}/frame_{i}_{video_path[11:-5]}.jpg', frame)
-            
                 img = frame.copy()
                 gray = cv.cvtColor(img, cv.COLOR_BGR2GRAY)
                 fname = f'frame_{i}_{video_path[11:-5]}.jpg'
@@ -399,6 +408,8 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 # enforce order 
                 ordered = order_points(src, pattern_size = pattern_size)
                 ordered_ref = ordered.reshape(-1, 1, 2).astype(np.float32)
+
+                
                 cv.cornerSubPix(gray, ordered_ref, (11,11), (-1,-1), criteria)
                 ordered_refined = ordered_ref.reshape(4, 2)
 
