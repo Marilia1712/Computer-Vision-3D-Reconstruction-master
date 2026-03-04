@@ -6,7 +6,7 @@ from engine.buffer.texture import *
 from engine.buffer.hdrbuffer import HDRBuffer
 from engine.buffer.blurbuffer import BlurBuffer
 from engine.effect.bloom import Bloom
-from assignment_debug import set_voxel_positions, generate_grid, get_cam_positions, get_cam_rotation_matrices
+from assignment import set_voxel_positions, generate_grid, get_cam_positions, get_cam_rotation_matrices
 from engine.camera import Camera
 from engine.config import config
 

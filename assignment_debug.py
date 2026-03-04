@@ -419,7 +419,6 @@ def render_lists(centres, active):
             colors.append([1.0, 1.0, 1.0])
 
     return pos, colors
-
         
 
 def visualize_masks_all_cams(frame_idx=0, k=5, n_train=200):
