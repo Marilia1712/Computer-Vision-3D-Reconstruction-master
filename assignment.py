@@ -209,19 +209,16 @@ def generate_voxel_grid():
     Create a (full) voxel grid in the world
     """
 
-    voxel_dim = 1  # cm
+    voxel_dim = 20.0   # 20 mm (2 cm) ← good compromise speed/quality
 
-    # empirical values
-    ranges = [
-        (-60, 80),    # x
-        (-30, 100),   # y
-        (-200, 200)   # z
-    ]
+    x = np.arange(-640, 640, voxel_dim, dtype=np.float32)
+    y = np.arange(0, 640, voxel_dim, dtype=np.float32)
+    z = np.arange(-640, 640, voxel_dim, dtype=np.float32)
 
-    axes = [np.arange(lo, hi, voxel_dim, dtype=np.float32) for lo, hi in ranges]
-
-    grid = np.meshgrid(*axes, indexing='ij')
+    grid = np.meshgrid(x, y, z, indexing='ij')
     voxels = np.stack([g.ravel() for g in grid], axis=1)
+
+    print("Voxel grid size:", len(voxels))
 
     return voxels
 
@@ -229,21 +226,34 @@ def generate_voxel_grid():
 
 def create_lookup_table(voxels, cam_params):
     """
-    create the lookup-table for the valid voxel back-projections onto each of the camera's FoVs.
+    Vectorized lookup table:
+    lut[cam][i] -> (u,v) pixel of voxel i in that camera
     """
 
-    lut = {1: {}, 2: {}, 3: {}, 4: {}}
+    voxels = voxels.astype(np.float32)
 
-    # position in R3 -> projection in R2 for each camera
-    for i in range(1,5):
-        camera_matrix, dist, rvec, tvec = cam_params[f'cam{i}']
-        for voxel in voxels:
-            projected_pixel, _ = cv.projectPoints(voxel, rvec, tvec, camera_matrix, dist)
-            u, v = int(round(projected_pixel[0][0][0])), int(round(projected_pixel[0][0][1]))
-            lut[i][tuple(voxel)] = (u,v)
+    lut = {}
+
+    for cam in range(1, 5):
+
+        camera_matrix, dist, rvec, tvec = cam_params[f'cam{cam}']
+
+        # project ALL voxels at once (fast)
+        projected_pixels, _ = cv.projectPoints(
+            voxels,
+            rvec,
+            tvec,
+            camera_matrix,
+            dist
+        )
+
+        # shape (N,1,2) → (N,2)
+        projected_pixels = projected_pixels.reshape(-1, 2)
+
+        # store per-camera array
+        lut[cam] = projected_pixels.astype(np.int32)
 
     return lut
-
 
 
 def set_voxel_positions(width, height, depth):
@@ -255,18 +265,7 @@ def set_voxel_positions(width, height, depth):
     frames = []
     background = {1: [], 2: [], 3: [], 4: []}
     foreground = {1: [], 2: [], 3: [], 4: []}
-    active_voxels = {1: [], 2: [], 3: [], 4: []}
     final_voxel, data = [], []
-
-
-
-    data, colors = [], []
-    for x in range(width):
-        for y in range(height):
-            for z in range(depth):
-                if random.randint(0, 1000) < 5:
-                    data.append([x*block_size - width/2, y*block_size, z*block_size - depth/2])
-                    colors.append([x / width, z / depth, y / height])
 
     #for each camera get background subtraction
     for i in range(1,5):
@@ -283,36 +282,38 @@ def set_voxel_positions(width, height, depth):
     lut = create_lookup_table(voxels, params)
 
     #for each frame...
-    frames = min(len(foreground[1]), len(foreground[2]), len(foreground[3]), len(foreground[4]))
+    #frames = min(len(foreground[1]), len(foreground[2]), len(foreground[3]), len(foreground[4]))
+
+    frames = 1
 
     for f in range(frames):
 
             #for each voxel in the grid...
-            for voxel in voxels:
-
+            for voxel_idx, voxel in enumerate(voxels):
                 keep = True
 
                 #for each camera...
                 for cam in range(1,5):
                     
-                    u, v = lut[cam][tuple(voxel)]
+                    u, v = lut[cam][voxel_idx]
                             
                     # 3 check if projected pixel lies inside the foreground mask
                     mask = foreground[cam][f]
                     if not (0 <= u < mask.shape[1] and 0 <= v < mask.shape[0]) or mask[v,u] == 0: # not only if its active, must address issues of Out Of Bounds
                         keep = False
                         break
-                    if keep:
-                        active_voxels[cam].append(voxel)
 
-            # 4 collect all voxels that are active in all camera views
-            if keep:
-                final_voxel.append(voxel)
+                # 4 collect all voxels that are active in all camera views
+                if keep:
+                    final_voxel.append(voxel)
 
-    data = [[voxel[0], -voxel[2], -voxel[1]] for voxel in final_voxel]
+    scale = 0.1  # mm → cm
+    data = [[v[0]*scale, v[1]*scale, v[2]*scale] for v in final_voxel]
 
-    for i in range(len(data)):
-        colors.append([1.0, 1.0, 1.0])
+    colors = [[1.0, 1.0, 1.0] for _ in final_voxel]
+
+    print("Foreground nonzero:", np.count_nonzero(foreground[1][0]))
+    print("Num voxels kept:", len(final_voxel))
 
     return data, colors
 
