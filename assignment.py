@@ -1,8 +1,6 @@
-from turtle import width
-
+#from turtle import width
 import glm
 import cv2 as cv
-import random
 import numpy as np
 import os
 import glob
@@ -10,24 +8,55 @@ import shutil
 from skimage import measure  # marching_cubes
 
 
-block_size = 1.0
 pattern_size = (8, 6)
+block_size = 1.0 # voxel size
 EDGE_SIZE = 115 # size of the square edge (in mm)
 
-def generate_board_points(cols, rows):
-    """
-    Function to define the board space.
-    param: cols: number of columns in the grid
-    param: rows: number of rows in the grid
-    return: board_points: list containing the board poitns coordinates the given grid
-    """
-    board_tl = (0,0)
-    board_tr = (cols - 1 , 0)
-    board_br = (cols - 1, rows - 1)
-    board_bl = (0, rows - 1)
-    board_points = (board_tl, board_tr, board_br, board_bl)
-    return np.array(board_points, dtype = np.float32)
+auto_objectPoints = {
+    "cam1": [],
+    "cam2": [],
+    "cam3": [],
+    "cam4": []
+}
+auto_imagePoints = {
+    "cam1": [],
+    "cam2": [],
+    "cam3": [],
+    "cam4": []
+}
+manual_objectPoints = {
+    "cam1": [],
+    "cam2": [],
+    "cam3": [],
+    "cam4": []
+}
+manual_imagePoints = {
+    "cam1": [],
+    "cam2": [],
+    "cam3": [],
+    "cam4": []
+}
+camera_matrix = {
+    "cam1": None,
+    "cam2": None,
+    "cam3": None,
+    "cam4": None
+}
+dist_coeffs = {
+    "cam1": None,
+    "cam2": None,
+    "cam3": None,
+    "cam4": None
+}
 
+criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
+top_left = (0,0)
+top_right = (pattern_size[0] - 1, 0)
+bottom_left = (0, pattern_size[1] - 1)
+bottom_right = (pattern_size[0] - 1, pattern_size[1] - 1)
+
+
+# built-in utility functions
 def generate_grid(width, depth):
     # Generates the floor grid locations
     # You don't need to edit this function
@@ -58,30 +87,25 @@ def get_cam_rotation_matrices():
         cam_rotations[c] = glm.rotate(cam_rotations[c], cam_angles[c][2] * np.pi / 180, [0, 0, 1])
     return cam_rotations
 
-def interpolate_corners(points, cols, rows):
-    """
-    Function that performs interpolation of image points.
-    param: points: list of four points of coordinates that we want to interpolate
-    param: cols: number of columns in the grid
-    param: rows: number of rows in the grid
-    return: img_grid: new grid containing all cols*rows set of points
-    """
-    if len(points) != 4:
-        raise Exception("Four points should be selected.")
-    img_points = np.array(points, dtype = np.float32)
-    board_points = generate_board_points(cols, rows)
-    H = cv.getPerspectiveTransform(board_points, img_points)
-    all_points = []
-    for y in range(0, rows):
-        for x in range(0, cols):
-            all_points.append((x,y))
-    all_points = np.array(all_points, dtype = np.float32)
-    img_grid = cv.perspectiveTransform(all_points.reshape(cols*rows, 1, 2), H)
-    return img_grid
 
+# functions for corner selection and interpolation
 def signed_area(p):
     x, y = p[:, 0], p[:, 1]
     return 0.5 * np.sum(x * np.roll(y, -1) - y * np.roll(x, -1))
+
+def generate_board_points(cols, rows):
+    """
+    Function to define the board space.
+    param: cols: number of columns in the grid
+    param: rows: number of rows in the grid
+    return: board_points: list containing the board poitns coordinates the given grid
+    """
+    board_tl = (0,0)
+    board_tr = (cols - 1 , 0)
+    board_br = (cols - 1, rows - 1)
+    board_bl = (0, rows - 1)
+    board_points = (board_tl, board_tr, board_br, board_bl)
+    return np.array(board_points, dtype = np.float32)
 
 def select_corners(event, x, y, flags, param):
     """
@@ -160,150 +184,33 @@ def order_points(src, pattern_size):
         ordered_points = np.array([ordered_points[0], ordered_points[3], ordered_points[2], ordered_points[1]], np.float32)
     return ordered_points
 
-def calibrate_with_reprojection_filter(objectPoints,
-                                       imagePoints,
-                                       image_size,
-                                       criteria,
-                                       threshold=1.0,
-                                       verbose=True):
+def interpolate_corners(points, cols, rows):
     """
-    Runs calibration, computes per-frame reprojection error,
-    rejects bad frames, and recalibrates.
-
-    Returns:
-        cameraMatrix, distCoeffs, rvecs, tvecs
+    Function that performs interpolation of image points.
+    param: points: list of four points of coordinates that we want to interpolate
+    param: cols: number of columns in the grid
+    param: rows: number of rows in the grid
+    return: img_grid: new grid containing all cols*rows set of points
     """
+    if len(points) != 4:
+        raise Exception("Four points should be selected.")
+    img_points = np.array(points, dtype = np.float32)
+    board_points = generate_board_points(cols, rows)
+    H = cv.getPerspectiveTransform(board_points, img_points)
+    all_points = []
+    for y in range(0, rows):
+        for x in range(0, cols):
+            all_points.append((x,y))
+    all_points = np.array(all_points, dtype = np.float32)
+    img_grid = cv.perspectiveTransform(all_points.reshape(cols*rows, 1, 2), H)
+    return img_grid
 
-    # -------------------------
-    # First calibration
-    # -------------------------
-    ret, K, dist, rvecs, tvecs = cv.calibrateCamera(
-        objectPoints, imagePoints, image_size, None, None,
-        flags=0, criteria=criteria
-    )
-
-    if verbose:
-        print("\n=== Per-frame reprojection errors ===")
-
-    good_obj = []
-    good_img = []
-
-    errors = []
-
-    # -------------------------
-    # Compute reprojection error per frame
-    # -------------------------
-    for idx, (objp, imgp, rvec, tvec) in enumerate(zip(objectPoints, imagePoints, rvecs, tvecs)):
-
-        proj, _ = cv.projectPoints(objp, rvec, tvec, K, dist)
-
-        err = np.mean(
-            np.linalg.norm(
-                proj.reshape(-1, 2) - imgp.reshape(-1, 2),
-                axis=1
-            )
-        )
-
-        errors.append(err)
-
-        if verbose:
-            print(f"Frame {idx:02d} → error = {err:.3f}px")
-
-        if err < threshold:
-            good_obj.append(objp)
-            good_img.append(imgp)
-        else:
-            if verbose:
-                print("   ❌ rejected")
-
-    # -------------------------
-    # If nothing rejected, skip recalibration
-    # -------------------------
-    if len(good_obj) == len(objectPoints):
-        if verbose:
-            print("\nNo frames rejected.")
-        return K, dist, rvecs, tvecs
-
-    # -------------------------
-    # Recalibrate with good frames only
-    # -------------------------
-    if verbose:
-        print(f"\nRecalibrating with {len(good_obj)}/{len(objectPoints)} good frames...")
-
-    ret, K, dist, rvecs, tvecs = cv.calibrateCamera(
-        good_obj, good_img, image_size, None, None,
-        flags=0, criteria=criteria
-    )
-
-    if verbose:
-        print("Done.\n")
-
-    return K, dist, rvecs, tvecs
 
 """
-    Exercise 1
+    Task 1 + Choice Task 7
 """
 
-auto_objectPoints = {
-    "cam1": [],
-    "cam2": [],
-    "cam3": [],
-    "cam4": []
-}
-auto_imagePoints = {
-    "cam1": [],
-    "cam2": [],
-    "cam3": [],
-    "cam4": []
-}
-manual_objectPoints = {
-    "cam1": [],
-    "cam2": [],
-    "cam3": [],
-    "cam4": []
-}
-manual_imagePoints = {
-    "cam1": [],
-    "cam2": [],
-    "cam3": [],
-    "cam4": []
-}
-camera_matrix = {
-    "cam1": None,
-    "cam2": None,
-    "cam3": None,
-    "cam4": None
-}
-dist_coeffs = {
-    "cam1": None,
-    "cam2": None,
-    "cam3": None,
-    "cam4": None
-}
-
-criteria = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 30, 0.001)
-top_left = (0,0)
-top_right = (pattern_size[0] - 1, 0)
-bottom_left = (0, pattern_size[1] - 1)
-bottom_right = (pattern_size[0] - 1, pattern_size[1] - 1)
-
-def reproj_error(objp, imgp, rvec, tvec, K, dist):
-    proj, _ = cv.projectPoints(objp, rvec, tvec, K, dist)
-    return np.mean(np.linalg.norm(proj.reshape(-1,2) - imgp.reshape(-1,2), axis=1))
-
-def save_camera_config_xml(filename, K, dist, rvec=None, tvec=None):
-    fs = cv.FileStorage(filename, cv.FILE_STORAGE_WRITE)
-
-    fs.write("CameraMatrix", K.astype(np.float32))
-    fs.write("DistortionCoeffs", dist.astype(np.float32))
-
-    if rvec is not None:
-        fs.write("rvec", rvec.astype(np.float32))
-    if tvec is not None:
-        fs.write("tvec", tvec.astype(np.float32))
-
-    fs.release()
-
+# functions for camera calibration
 def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number = 50):
 
     #video_path = f'data/cam{cameraNumber}/intrinsics.avi'
@@ -496,7 +403,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
 
     print(crns)
     return crns
-        
+
 def create_object_points(cols, rows, square_size_mm = EDGE_SIZE):
     """
     Create the 3D world coordinates of the chessboard corners.
@@ -511,6 +418,105 @@ def create_object_points(cols, rows, square_size_mm = EDGE_SIZE):
             objp.append((X, Y, Z))
 
     return np.array(objp, dtype=np.float32)
+
+def save_camera_config_xml(filename, K, dist, rvec=None, tvec=None):
+    fs = cv.FileStorage(filename, cv.FILE_STORAGE_WRITE)
+
+    fs.write("CameraMatrix", K.astype(np.float32))
+    fs.write("DistortionCoeffs", dist.astype(np.float32))
+
+    if rvec is not None:
+        fs.write("rvec", rvec.astype(np.float32))
+    if tvec is not None:
+        fs.write("tvec", tvec.astype(np.float32))
+
+    fs.release()
+
+# functions for improved camera calibration (choice task 7)
+def reproj_error(objp, imgp, rvec, tvec, K, dist):
+    proj, _ = cv.projectPoints(objp, rvec, tvec, K, dist)
+    return np.mean(np.linalg.norm(proj.reshape(-1,2) - imgp.reshape(-1,2), axis=1))
+
+def calibrate_with_reprojection_filter(objectPoints,
+                                       imagePoints,
+                                       image_size,
+                                       criteria,
+                                       threshold=1.0,
+                                       verbose=True):
+    """
+    Runs calibration, computes per-frame reprojection error,
+    rejects bad frames, and recalibrates.
+
+    Returns:
+        cameraMatrix, distCoeffs, rvecs, tvecs
+    """
+
+    # -------------------------
+    # First calibration
+    # -------------------------
+    ret, K, dist, rvecs, tvecs = cv.calibrateCamera(
+        objectPoints, imagePoints, image_size, None, None,
+        flags=0, criteria=criteria
+    )
+
+    if verbose:
+        print("\n=== Per-frame reprojection errors ===")
+
+    good_obj = []
+    good_img = []
+
+    errors = []
+
+    # -------------------------
+    # Compute reprojection error per frame
+    # -------------------------
+    for idx, (objp, imgp, rvec, tvec) in enumerate(zip(objectPoints, imagePoints, rvecs, tvecs)):
+
+        proj, _ = cv.projectPoints(objp, rvec, tvec, K, dist)
+
+        err = np.mean(
+            np.linalg.norm(
+                proj.reshape(-1, 2) - imgp.reshape(-1, 2),
+                axis=1
+            )
+        )
+
+        errors.append(err)
+
+        if verbose:
+            print(f"Frame {idx:02d} → error = {err:.3f}px")
+
+        if err < threshold:
+            good_obj.append(objp)
+            good_img.append(imgp)
+        else:
+            if verbose:
+                print("   ❌ rejected")
+
+    # -------------------------
+    # If nothing rejected, skip recalibration
+    # -------------------------
+    if len(good_obj) == len(objectPoints):
+        if verbose:
+            print("\nNo frames rejected.")
+        return K, dist, rvecs, tvecs
+
+    # -------------------------
+    # Recalibrate with good frames only
+    # -------------------------
+    if verbose:
+        print(f"\nRecalibrating with {len(good_obj)}/{len(objectPoints)} good frames...")
+
+    ret, K, dist, rvecs, tvecs = cv.calibrateCamera(
+        good_obj, good_img, image_size, None, None,
+        flags=0, criteria=criteria
+    )
+
+    if verbose:
+        print("Done.\n")
+
+    return K, dist, rvecs, tvecs
+
 
 board_object_points = create_object_points(pattern_size[0], pattern_size[1], EDGE_SIZE)
 
@@ -547,7 +553,7 @@ for cameraNumber in range(1, 5):
         f.write(f"Camera Matrix:\n{camera_matrix[f'cam{cameraNumber}']}\n\nDistortion Coefficients:\n{dist_coeffs[f'cam{cameraNumber}']}")
 
 
-# #1.2 estrinsic parameters 
+#1.2 estrinsic parameters 
 for cameraNumber in range(1, 5):
     extrinsic_path = f'data/cam{cameraNumber}/checkerboard.avi'
     dest_man = f'./manual_images/cam{cameraNumber}_ext'
@@ -579,9 +585,11 @@ for cameraNumber in range(1, 5):
     save_camera_config_xml(f"cam{cameraNumber}_config.xml", K, dist, rvec, tvec)
 
 
-
 """
-    Exercise 2
+#################################################################################################################################
+"""
+"""
+    Task 2
 """
 
 def background_detection(video_path):
@@ -613,7 +621,6 @@ def background_detection(video_path):
     # cv.waitKey(0)
     # cv.destroyAllWindows()
     return background
-
 
 def foreground_mask_at_frame(video_path, background, kernel, frame_idx=0, k=3,
                              extra_dilate=2, extra_close=2):
@@ -676,7 +683,11 @@ for i in range(1,5):
 """
 
 """
-Exercise 3
+#################################################################################################################################
+"""
+"""
+    Task 3
+
 """
 
 # Get camera position (adaptation of code from Assingnment 1)
@@ -966,21 +977,24 @@ def set_voxel_positions():
     colors = [[1.0, 1.0, 1.0] for _ in positions]
     return positions, colors
 
-
+"""
+#################################################################################################################################
+"""
 """
     Choice task 4: Implementing the surface mesh
 """
-def voxels_to_volume(voxels, voxel_size=2.0, padding=1):
+
+def voxels_to_volume(voxels, voxel_size= block_size, padding=1):
     """
-    Convert world-coordinate voxels into a 3D occupancy grid.
+    Convert world-coordinate voxels into a 3d grid
     
     voxels: (N,3) float array
     voxel_size: distance between voxel centers
     padding: number of empty voxels to pad around
     
-    Returns:
-        volume: 3D numpy array
-        origin: world coordinates of (0,0,0) in volume
+    ret:
+        volume 3d numpy arr
+        world coordinate origin in volume
     """
     # Compute bounds
     min_coord = voxels.min(axis=0) - padding * voxel_size
@@ -997,7 +1011,7 @@ def voxels_to_volume(voxels, voxel_size=2.0, padding=1):
 
 def volume_to_mesh(volume, voxel_size=2.0, origin=np.array([0,0,0])):
     """
-    Convert 3D occupancy grid to vertices + faces using Marching Cubes.
+    Convert 3D grid to vertices + faces using MarchingCubes
     """
     verts, faces, normals, values = measure.marching_cubes(volume, level=0.5)
     
@@ -1006,30 +1020,30 @@ def volume_to_mesh(volume, voxel_size=2.0, origin=np.array([0,0,0])):
     
     return verts_world, faces
 
-def save_mesh_ply(filename, verts, faces):
-    with open(filename, 'w') as f:
-        f.write("ply\nformat ascii 1.0\n")
-        f.write(f"element vertex {len(verts)}\n")
-        f.write("property float x\nproperty float y\nproperty float z\n")
-        f.write(f"element face {len(faces)}\n")
-        f.write("property list uchar int vertex_indices\n")
-        f.write("end_header\n")
-        for v in verts:
-            f.write(f"{v[0]} {v[1]} {v[2]}\n")
-        for face in faces:
-            f.write(f"3 {face[0]} {face[1]} {face[2]}\n")
+def save_mesh_obj(filename, verts, faces):
+    """
+    Save mesh as a wavefront obj
+    faces must be triangular
+    """
+    with open(filename, "w") as f:
+        f.write("# OBJ file generated from voxel marching cubes\n")
 
+        # vertices
+        for v in verts:
+            f.write(f"v {v[0]} {v[1]} {v[2]}\n")
+
+        # faces
+        for face in faces:
+            f.write(f"f {face[0]+1} {face[1]+1} {face[2]+1}\n")
 
 positions, colors = set_voxel_positions()
 voxels_np = np.array(positions)
 
-# Step 1: Convert to 3D volume
+# 4.1 convert voxels to 3D volume
 volume, origin = voxels_to_volume(voxels_np, voxel_size=2.0, padding=1)
 
-# Step 2: Extract mesh
+# 4.2 extract mesh
 verts, faces = volume_to_mesh(volume, voxel_size=2.0, origin=origin)
 
-print("Number of vertices:", verts.shape[0])
-print("Number of faces:", faces.shape[0])
-
-save_mesh_ply("mesh.ply", verts, faces)
+# 4.3 Save wavefront mesh
+save_mesh_obj("mesh.obj", verts, faces)
