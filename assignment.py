@@ -69,77 +69,58 @@ def background_detection(video_path):
     #Take median
     background = np.median(all_frames_back, axis = 0)
     background = background.astype(np.uint8)
-    cv.imshow("Background", background)
-    cv.waitKey(0)
-    cv.destroyAllWindows()
+    # cv.imshow("Background", background)
+    # cv.waitKey(0)
+    # cv.destroyAllWindows()
     return background
 
 
-def background_subtraction(video_path, background, kernel, k = 3):
-    fore = cv.VideoCapture(video_path)
+def foreground_mask_at_frame(video_path, background, kernel, frame_idx=0, k=3,
+                             extra_dilate=2, extra_close=2):
+    """
+    Compute ONE foreground mask at a chosen frame index.
+    Also applies extra morphology to "turn on" missing pixels (holes, thin regions).
+    """
+    cap = cv.VideoCapture(video_path)
+    cap.set(cv.CAP_PROP_POS_FRAMES, int(frame_idx))
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        return None
 
-    foreground_mask = []
-    n_frames_fore = int(fore.get(cv.CAP_PROP_FRAME_COUNT))
-    i = 0
+    fore_hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
 
-    while i < n_frames_fore:
-        ret, frame = fore.read()
-        if not ret:
-            i += 1
-            continue
+    hue_diff = cv.absdiff(fore_hsv[:, :, 0], background[:, :, 0])
+    hue_diff = np.minimum(hue_diff, 180 - hue_diff)
+    sat_diff = cv.absdiff(fore_hsv[:, :, 1], background[:, :, 1])
+    val_diff = cv.absdiff(fore_hsv[:, :, 2], background[:, :, 2])
 
-        fore_hsv = cv.cvtColor(frame, cv.COLOR_BGR2HSV)
+    mean_h, std_h = float(np.mean(hue_diff)), float(np.std(hue_diff))
+    mean_s, std_s = float(np.mean(sat_diff)), float(np.std(sat_diff))
+    mean_v, std_v = float(np.mean(val_diff)), float(np.std(val_diff))
 
-        hue_diff = cv.absdiff(fore_hsv[:,:,0], background[:,:,0])
-        hue_diff = np.minimum(hue_diff, 180 - hue_diff)   
+    thresh_hue = mean_h + k * std_h
+    thresh_sat = mean_s + k * std_s
+    thresh_val = mean_v + k * std_v
 
-        sat_diff = cv.absdiff(fore_hsv[:,:,1], background[:,:,1])
-        val_diff = cv.absdiff(fore_hsv[:,:,2], background[:,:,2])
-        
+    _, mask_h = cv.threshold(hue_diff, thresh_hue, 255, cv.THRESH_BINARY)
+    _, mask_s = cv.threshold(sat_diff, thresh_sat, 255, cv.THRESH_BINARY)
+    _, mask_v = cv.threshold(val_diff, thresh_val, 255, cv.THRESH_BINARY)
 
-        # TODO: build stronger automation for auto threshold detection
-        mean_h = np.mean(hue_diff)
-        std_h = np.std(hue_diff)
+    mask = cv.bitwise_or(mask_h, mask_s)
+    mask = cv.bitwise_or(mask, mask_v)
 
-        mean_s = np.mean(sat_diff)
-        std_s = np.std(sat_diff)
+    # Basic clean
+    mask = cv.morphologyEx(mask, cv.MORPH_OPEN, kernel, iterations=1)
 
-        mean_v = np.mean(val_diff)
-        std_v = np.std(val_diff)
+    # ---- IMPORTANT: "turn on" missing pixels ----
+    # Close fills holes; dilate fattens silhouette (helps voxel intersection)
+    if extra_close > 0:
+        mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, kernel, iterations=extra_close)
+    if extra_dilate > 0:
+        mask = cv.dilate(mask, kernel, iterations=extra_dilate)
 
-        thresh_hue = mean_h + k * std_h
-        thresh_sat = mean_s + k * std_s
-        thresh_val = mean_v + k * std_v
-
-        _, mask_h = cv.threshold(hue_diff, thresh_hue, 255, cv.THRESH_BINARY)
-        _, mask_s = cv.threshold(sat_diff, thresh_sat, 255, cv.THRESH_BINARY)
-        _, mask_v = cv.threshold(val_diff, thresh_val, 255, cv.THRESH_BINARY)
-
-        mask = cv.bitwise_or(mask_h, mask_s)
-        mask = cv.bitwise_or(mask, mask_v)
-
-        mask = cv.erode(mask, kernel, iterations=1)
-        mask = cv.dilate(mask, kernel, iterations=1)   
-
-        mask = cv.dilate(mask, kernel, iterations=1)
-        mask = cv.erode(mask, kernel, iterations=1)   
-        foreground_mask.append(mask)
-
-        cv.imshow("Hue diff", hue_diff)
-        cv.imshow("Sat diff", sat_diff)
-        cv.imshow("Val diff", val_diff)
-        cv.imshow("Final Mask", mask)
-
-        key = cv.waitKey(1) & 0xFF        
-        if key == 27 or key == ord('q'):
-            break
-
-        i += 1
-
-    fore.release()
-    cv.destroyAllWindows()
-    return foreground_mask
-
+    return mask
 
 """
 #loop to get background subtraction for each camera
@@ -204,119 +185,246 @@ for i in range(1, 5):
 
 
 def generate_voxel_grid():
-
-    """
-    Create a (full) voxel grid in the world
-    """
-
-    voxel_dim = 1  # cm
-
-    # empirical values
-    ranges = [
-        (-60, 80),    # x
-        (-30, 100),   # y
-        (-200, 200)   # z
-    ]
-
+    ranges = [(-50,50), (0,150), (-50,50)]
+    voxel_dim = 2.0
     axes = [np.arange(lo, hi, voxel_dim, dtype=np.float32) for lo, hi in ranges]
-
     grid = np.meshgrid(*axes, indexing='ij')
-    voxels = np.stack([g.ravel() for g in grid], axis=1)
+    return np.stack([g.ravel() for g in grid], axis=1)
 
-    return voxels
-
-
-
-def create_lookup_table(voxels, cam_params):
+def create_lookup_table_fast(voxels, cam_params):
     """
-    create the lookup-table for the valid voxel back-projections onto each of the camera's FoVs.
+    Robust LUT:
+      - projects all voxels at once per camera
+      - filters invalid uv (NaN/Inf/huge)
+      - filters voxels behind the camera (z_cam <= 0)
+    Returns: lut[cam] = (u, v, valid)
     """
+    lut = {}
+    objp = voxels.reshape(-1, 1, 3).astype(np.float32)
 
-    lut = {1: {}, 2: {}, 3: {}, 4: {}}
+    for cam in range(1, 5):
+        camera_matrix, dist, rvec, tvec = cam_params[f'cam{cam}']
 
-    # position in R3 -> projection in R2 for each camera
-    for i in range(1,5):
-        camera_matrix, dist, rvec, tvec = cam_params[f'cam{i}']
-        for voxel in voxels:
-            projected_pixel, _ = cv.projectPoints(voxel, rvec, tvec, camera_matrix, dist)
-            u, v = int(round(projected_pixel[0][0][0])), int(round(projected_pixel[0][0][1]))
-            lut[i][tuple(voxel)] = (u,v)
+        camera_matrix = camera_matrix.astype(np.float64)
+        dist = dist.astype(np.float64)
+        rvec = rvec.astype(np.float64)
+        tvec = tvec.astype(np.float64)
+
+        # ---- front-of-camera filter (camera coords z > 0)
+        R, _ = cv.Rodrigues(rvec)
+        Xc = (R @ voxels.T + tvec).T  # (N,3)
+        valid_front = Xc[:, 2] > 1e-6
+
+        # ---- project
+        imgpts, _ = cv.projectPoints(objp, rvec, tvec, camera_matrix, dist)
+        uv = imgpts.reshape(-1, 2)
+
+        # ---- validity mask MUST be created before &= operations
+        valid = np.isfinite(uv).all(axis=1)
+
+        # remove extreme finite junk
+        MAX_PIX = 1e7
+        valid &= (np.abs(uv[:, 0]) < MAX_PIX) & (np.abs(uv[:, 1]) < MAX_PIX)
+
+        # apply front-of-camera constraint
+        valid &= valid_front
+
+        # ---- fill u,v
+        u = np.full(len(uv), -1, dtype=np.int32)
+        v = np.full(len(uv), -1, dtype=np.int32)
+
+        uv_valid = uv[valid].astype(np.float64)
+        u[valid] = np.rint(uv_valid[:, 0]).astype(np.int32)
+        v[valid] = np.rint(uv_valid[:, 1]).astype(np.int32)
+
+        lut[cam] = (u, v, valid)
 
     return lut
+    
+def build_bg_gaussian(video_path, max_frames=80, sample_every=2, eps=1e-6):
+    """
+    Build per-pixel Gaussian model on BGR (or HSV if you want).
+    Returns: mu (H,W,3) float32, var (H,W,3) float32
+    """
+    cap = cv.VideoCapture(video_path)
+    n = int(cap.get(cv.CAP_PROP_FRAME_COUNT))
 
+    frames = []
+    idxs = list(range(0, n, sample_every))
+    if len(idxs) > max_frames:
+        idxs = np.linspace(0, n-1, max_frames, dtype=np.int32).tolist()
 
+    for i in idxs:
+        cap.set(cv.CAP_PROP_POS_FRAMES, int(i))
+        ret, frame = cap.read()
+        if not ret:
+            continue
+        frames.append(frame.astype(np.float32))
+
+    cap.release()
+    if len(frames) == 0:
+        raise RuntimeError(f"No frames read from {video_path}")
+
+    stack = np.stack(frames, axis=0)          # (T,H,W,3)
+    mu = stack.mean(axis=0)                   # (H,W,3)
+    var = stack.var(axis=0) + eps             # (H,W,3)
+    return mu.astype(np.float32), var.astype(np.float32)
+
+def fg_mask_gaussian_at_frame(video_path, mu, var, frame_idx=0,
+                              tau=9.0,  # ~3-sigma per channel aggregated
+                              kernel_size=3, close_it=2, open_it=1):
+    """
+    Foreground where normalized squared distance > tau.
+    tau ~ 9 is a decent start for 3 channels.
+    """
+    cap = cv.VideoCapture(video_path)
+    cap.set(cv.CAP_PROP_POS_FRAMES, int(frame_idx))
+    ret, frame = cap.read()
+    cap.release()
+    if not ret:
+        return None
+
+    I = frame.astype(np.float32)
+    diff2 = (I - mu) ** 2
+    d = (diff2 / var).sum(axis=2)  # (H,W)
+
+    mask = (d > tau).astype(np.uint8) * 255
+
+    # morphology
+    k = cv.getStructuringElement(cv.MORPH_ELLIPSE, (kernel_size, kernel_size))
+    if open_it > 0:
+        mask = cv.morphologyEx(mask, cv.MORPH_OPEN, k, iterations=open_it)
+    if close_it > 0:
+        mask = cv.morphologyEx(mask, cv.MORPH_CLOSE, k, iterations=close_it)
+
+    return mask
 
 def set_voxel_positions(width, height, depth):
     """
-    Calculate proper voxel arrays
+    Fast voxel carving for ONE frame.
+    Also fattens silhouettes to avoid missing voxels due to holes/thin masks.
     """
 
-    colors = [] #TODO: do we need to do anything about the colors?
-    frames = []
-    background = {1: [], 2: [], 3: [], 4: []}
-    foreground = {1: [], 2: [], 3: [], 4: []}
-    active_voxels = {1: [], 2: [], 3: [], 4: []}
-    final_voxel, data = [], []
+    if not hasattr(set_voxel_positions, "_cache"):
+        set_voxel_positions._cache = {}
+    cache = set_voxel_positions._cache
 
+    # ---- Choose which frame you want to reconstruct
+    f = 0  # change this if you want a different frame
 
+    # ---- Backgrounds cached (compute once)
+    if "bg_model" not in cache:
+        bg_model = {}
+        for cam in range(1,5):
+            bg_path = f"data/cam{cam}/background.avi"
+            mu, var = build_bg_gaussian(bg_path, max_frames=80, sample_every=2)
+            bg_model[cam] = (mu, var)
+        cache["bg_model"] = bg_model
+    bg_model = cache["bg_model"]
 
-    data, colors = [], []
-    for x in range(width):
-        for y in range(height):
-            for z in range(depth):
-                if random.randint(0, 1000) < 5:
-                    data.append([x*block_size - width/2, y*block_size, z*block_size - depth/2])
-                    colors.append([x / width, z / depth, y / height])
+    # ---- ONE foreground mask per cam for this frame (cache per frame index)
+    key_masks = ("masks", f)
+    if key_masks not in cache:
+        masks = {}
 
-    #for each camera get background subtraction
-    for i in range(1,5):
-                video_path_back = f"data/cam{i}/background.avi"
-                video_path_fore = f"data/cam{i}/video.avi"
-                kernel = cv.getStructuringElement(cv.MORPH_ELLIPSE,(3,3))
+        for cam in range(1, 5):
+            video_path_fore = f"data/cam{cam}/video.avi"
 
-                background[i] = background_detection(video_path_back)
-                foreground[i] = background_subtraction(video_path_fore, background[i], kernel)
+            # get gaussian background model
+            mu, var = bg_model[cam]
 
-    # 1 define a 3d voxel grid
-    voxels = generate_voxel_grid()
-    # 2 project the 3d voxel grid to each camera view
-    lut = create_lookup_table(voxels, params)
+            mask = fg_mask_gaussian_at_frame(
+                video_path_fore,
+                mu,
+                var,
+                frame_idx=f,
+                tau=9.0,
+                kernel_size=3,
+                close_it=2,
+                open_it=1
+            )
 
-    #for each frame...
-    frames = min(len(foreground[1]), len(foreground[2]), len(foreground[3]), len(foreground[4]))
+            if mask is None:
+                return [], []
 
-    for f in range(frames):
+            masks[cam] = mask
 
-            #for each voxel in the grid...
-            for voxel in voxels:
+        cache[key_masks] = masks
+    masks = cache[key_masks]
+    for cam in (1,2,3,4):
+        nz = int(np.count_nonzero(masks[cam]))
+        print(f"cam{cam} mask nonzero: {nz} / {masks[cam].size}")
 
-                keep = True
+    # ---- Voxels cached
+    if "voxels" not in cache:
+        SCALE = 10.0
+        voxels = generate_voxel_grid().astype(np.float32) * SCALE
+        cache["voxels"] = voxels
+    voxels = cache["voxels"]
 
-                #for each camera...
-                for cam in range(1,5):
-                    
-                    u, v = lut[cam][tuple(voxel)]
-                            
-                    # 3 check if projected pixel lies inside the foreground mask
-                    mask = foreground[cam][f]
-                    if not (0 <= u < mask.shape[1] and 0 <= v < mask.shape[0]) or mask[v,u] == 0: # not only if its active, must address issues of Out Of Bounds
-                        keep = False
-                        break
-                    if keep:
-                        active_voxels[cam].append(voxel)
+    # ---- LUT cached (vectorized)
+    if "lut_fast" not in cache:
+        cache["lut_fast"] = create_lookup_table_fast(voxels, params)
+    lut = cache["lut_fast"]
 
-            # 4 collect all voxels that are active in all camera views
-            if keep:
-                final_voxel.append(voxel)
+    for cam in (1,2,3,4):
+        u, v, valid = lut[cam]
+        mask = masks[cam]
+        h, w = mask.shape[:2]
+        inb = (u>=0) & (u<w) & (v>=0) & (v<h)
+        print(f"cam{cam} in-bounds projections: {inb.mean()*100:.2f}%")
 
-    data = [[voxel[0], -voxel[2], -voxel[1]] for voxel in final_voxel]
+    # ---- Vectorized carving
 
-    for i in range(len(data)):
-        colors.append([1.0, 1.0, 1.0])
+    N = voxels.shape[0]
+    votes = np.zeros(N, dtype=np.uint8)
 
-    return data, colors
+    for cam in (1,2,3,4):
+        u, v, valid = lut[cam]
+        mask = masks[cam]
+        h, w = mask.shape[:2]
 
+        inb = valid & (u >= 0) & (u < w) & (v >= 0) & (v < h)
+        idx = np.where(inb)[0]
+        if idx.size == 0:
+            continue
 
+        fg = mask[v[idx], u[idx]] != 0
+        votes[idx[fg]] += 1
+
+    K = 3  # require 3 of 4 cameras (try 2 if too few)
+    alive = np.where(votes >= K)[0]
+    print("survivors (vote):", alive.size)
+
+    if alive.size == 0:
+        return [], []
+    kept_voxels = voxels[alive].astype(np.float32)
+
+    # ---- visualization transform ----
+    SCALE = 10.0
+    voxel_dim = 2.0
+    step_world = SCALE * voxel_dim   # world distance between neighbors
+
+    # 1) center in X,Z only (keep height meaningful)
+    center_xz = kept_voxels.mean(axis=0)
+    center_xz[1] = 0.0
+    kept_centered = kept_voxels - center_xz
+
+    # 2) put the lowest voxel on the floor (no negative height)
+    kept_centered[:, 1] -= kept_centered[:, 1].min()
+
+    # 3) increase spacing so cubes don't merge visually
+    SPACING = 2.0                 # <--- makes it less dense
+    VIS_SCALE = SPACING / step_world
+    kept_vis = kept_centered * VIS_SCALE
+
+    # If your visualizer floor is at y=-1, optionally lift a bit:
+    # kept_vis[:, 1] += 1.0
+
+    positions = np.column_stack([kept_vis[:, 0], kept_vis[:, 1], kept_vis[:, 2]])
+    positions = positions.astype(float).tolist()
+    colors = [[1.0, 1.0, 1.0] for _ in positions]
+    return positions, colors
 """
 Referencing image: https://uu.brightspace.com/content/enforced/44949-BETA--2025--3-GS--INFOMCV--V/csfiles/home_dir/courses/BETA-2023-3-GS-INFOMCV-V/BETA-2023-3-GS-INFOMCV-V/flow.png
 
