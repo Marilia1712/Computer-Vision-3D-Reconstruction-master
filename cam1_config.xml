@@ -12,4 +12,16 @@
   <dt>f</dt>
   <data>
     -0.354746968 0.167174727 0.000422981393 0.000351647323 -0.0445953943</data></DistortionCoeffs>
+<rvec type_id="opencv-matrix">
+  <rows>3</rows>
+  <cols>1</cols>
+  <dt>f</dt>
+  <data>
+    1.56809056 0.653505981 -0.584290206</data></rvec>
+<tvec type_id="opencv-matrix">
+  <rows>3</rows>
+  <cols>1</cols>
+  <dt>f</dt>
+  <data>
+    -188.749832 865.704834 4211.8877</data></tvec>
 </opencv_storage>
