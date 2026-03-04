@@ -7,6 +7,7 @@ import numpy as np
 import os
 import glob
 import shutil
+from skimage import measure  # marching_cubes
 
 
 block_size = 1.0
@@ -26,18 +27,6 @@ def generate_board_points(cols, rows):
     board_bl = (0, rows - 1)
     board_points = (board_tl, board_tr, board_br, board_bl)
     return np.array(board_points, dtype = np.float32)
-   
-def set_voxel_positions(width, height, depth):
-    # Generates random voxel locations
-    # TODO: You need to calculate proper voxel arrays instead of random ones.
-    data, colors = [], []
-    for x in range(width):
-        for y in range(height):
-            for z in range(depth):
-                if random.randint(0, 1000) < 5:
-                    data.append([x*block_size - width/2, y*block_size, z*block_size - depth/2])
-                    colors.append([x / width, z / depth, y / height])
-    return data, colors
 
 def generate_grid(width, depth):
     # Generates the floor grid locations
@@ -850,7 +839,7 @@ def fg_mask_gaussian_at_frame(video_path, mu, var, frame_idx=0,
 
     return mask
 
-def set_voxel_positions(width, height, depth):
+def set_voxel_positions():
     """
     Fast voxel carving for ONE frame.
     Also fattens silhouettes to avoid missing voxels due to holes/thin masks.
@@ -976,3 +965,71 @@ def set_voxel_positions(width, height, depth):
     positions = positions.astype(float).tolist()
     colors = [[1.0, 1.0, 1.0] for _ in positions]
     return positions, colors
+
+
+"""
+    Choice task 4: Implementing the surface mesh
+"""
+def voxels_to_volume(voxels, voxel_size=2.0, padding=1):
+    """
+    Convert world-coordinate voxels into a 3D occupancy grid.
+    
+    voxels: (N,3) float array
+    voxel_size: distance between voxel centers
+    padding: number of empty voxels to pad around
+    
+    Returns:
+        volume: 3D numpy array
+        origin: world coordinates of (0,0,0) in volume
+    """
+    # Compute bounds
+    min_coord = voxels.min(axis=0) - padding * voxel_size
+    max_coord = voxels.max(axis=0) + padding * voxel_size
+    
+    dims = np.ceil((max_coord - min_coord) / voxel_size).astype(int) + 1
+    volume = np.zeros(dims, dtype=np.uint8)
+    
+    # Map voxel positions to indices
+    idxs = np.floor((voxels - min_coord) / voxel_size).astype(int)
+    volume[idxs[:,0], idxs[:,1], idxs[:,2]] = 1
+    
+    return volume, min_coord
+
+def volume_to_mesh(volume, voxel_size=2.0, origin=np.array([0,0,0])):
+    """
+    Convert 3D occupancy grid to vertices + faces using Marching Cubes.
+    """
+    verts, faces, normals, values = measure.marching_cubes(volume, level=0.5)
+    
+    # Transform from voxel indices to world coordinates
+    verts_world = verts * voxel_size + origin
+    
+    return verts_world, faces
+
+def save_mesh_ply(filename, verts, faces):
+    with open(filename, 'w') as f:
+        f.write("ply\nformat ascii 1.0\n")
+        f.write(f"element vertex {len(verts)}\n")
+        f.write("property float x\nproperty float y\nproperty float z\n")
+        f.write(f"element face {len(faces)}\n")
+        f.write("property list uchar int vertex_indices\n")
+        f.write("end_header\n")
+        for v in verts:
+            f.write(f"{v[0]} {v[1]} {v[2]}\n")
+        for face in faces:
+            f.write(f"3 {face[0]} {face[1]} {face[2]}\n")
+
+
+positions, colors = set_voxel_positions()
+voxels_np = np.array(positions)
+
+# Step 1: Convert to 3D volume
+volume, origin = voxels_to_volume(voxels_np, voxel_size=2.0, padding=1)
+
+# Step 2: Extract mesh
+verts, faces = volume_to_mesh(volume, voxel_size=2.0, origin=origin)
+
+print("Number of vertices:", verts.shape[0])
+print("Number of faces:", faces.shape[0])
+
+save_mesh_ply("mesh.ply", verts, faces)
