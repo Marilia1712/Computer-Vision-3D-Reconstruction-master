@@ -251,7 +251,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
             if i > video_length:
                 break
 
-            cv.imwrite(f'{dest}/frame_{i}_{video_path[10:-5]}.jpg', frame)
+            #cv.imwrite(f'{dest}/frame_{i}_{video_path[10:-5]}.jpg', frame)
 
             gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
 
