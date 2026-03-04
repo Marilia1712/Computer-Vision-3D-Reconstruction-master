@@ -342,17 +342,11 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 img_points = img_grid.reshape(-1, 2)
                 print("Using convex hull fallback")
 
-                # Visualization for convex hull fallback
+                # Visualization for convex hull
                 frame_hull = frame.copy()
-
-                # draw convex hull in green
                 cv.polylines(frame_hull, [hull.astype(np.int32)], isClosed=True, color=(0,255,0), thickness=2)
-
-                # draw minAreaRect rectangle in red
                 rect_pts = box.astype(np.int32)
                 cv.polylines(frame_hull, [rect_pts], isClosed=True, color=(0,0,255), thickness=2)
-
-                # draw the 4 ordered points in blue
                 for (x, y) in ordered_refined:
                     cv.circle(frame_hull, (int(x), int(y)), 5, (255,0,0), -1)
 
@@ -360,7 +354,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                         cv.FONT_HERSHEY_SIMPLEX, 1, (0,255,255), 2)
 
                 cv.imshow("Convex Hull Visualization", frame_hull)
-                cv.waitKey(5000)  # show for 500 ms, adjust as needed
+                cv.waitKey(5000)
 
             # case 3: insufficient/absent localization of corners -> manual input
             else:
