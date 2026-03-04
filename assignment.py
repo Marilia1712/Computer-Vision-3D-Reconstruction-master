@@ -62,6 +62,7 @@ bottom_right = (pattern_size[0] - 1, pattern_size[1] - 1)
 
 
 # built-in utility functions
+
 def generate_grid(width, depth):
     # Generates the floor grid locations
     # You don't need to edit this function
@@ -94,6 +95,7 @@ def get_cam_rotation_matrices():
 
 
 # functions for corner selection and interpolation
+
 def signed_area(p):
     x, y = p[:, 0], p[:, 1]
     return 0.5 * np.sum(x * np.roll(y, -1) - y * np.roll(x, -1))
@@ -217,15 +219,14 @@ def interpolate_corners(points, cols, rows):
 #################################################################################################################################
 """
 """
-    Task 1 + Choice Task 7: (improved) calibration
+    Task 1 + Choice Task 1 + Choice Task 7: (improved) calibration and automated rejection of low-quality calibration frames 
 """
 
-MIN_POINTS = (pattern_size[0]*pattern_size[1]) // 4
+MIN_POINTS = (pattern_size[0]*pattern_size[1]) // 4 ## min number of points needed for the convex hull technique
 
 # functions for camera calibration
 def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number = 50):
 
-    #video_path = f'data/cam{cameraNumber}/intrinsics.avi'
     cap = cv.VideoCapture(video_path)
 
     manual_images = glob.glob(f'{dest_manual}/*.jpg')
@@ -251,55 +252,41 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
             if i > video_length:
                 break
 
-            #cv.imwrite(f'{dest}/frame_{i}_{video_path[10:-5]}.jpg', frame)
-
             gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
 
             # Find the chess board corners
             ret, corners = cv.findChessboardCorners(gray, (pattern_size[0],pattern_size[1]), None)
 
-            # case 1: full, straighforward localization of corners
+            # case 1: straighforward localization of corners
             if ret == True:
                 print(f"\nFrame {i}: chessboard detected")
 
                 corners2 = cv.cornerSubPix(gray, corners, (11,11), (-1,-1), criteria)
-
                 h, w = gray.shape
 
-                # ==============================
-                # 1. Coverage check                 -> TODO: move this to underneath the three cases
-                # ==============================
+                # ------- Choice Task 7: - Coverage check           -> TODO: move this to underneath the three cases
                 xs = corners2[:,0,0]
                 ys = corners2[:,0,1]
-
                 cov_x = (xs.max() - xs.min()) / w
                 cov_y = (ys.max() - ys.min()) / h
 
-                print(f"  coverage x={cov_x:.2f} y={cov_y:.2f}")
-
                 if cov_x < 0.2 or cov_y < 0.2:
-                    print("  ❌ Rejected: poor spatial coverage")
+                    print("Rejected: spatial coverage is not enough")
                     continue
 
-                # ==============================
-                # 2. Board area check
-                # ==============================
-                
+                # ------ Choice Task 7: - Board area check
                 area = cv.contourArea(corners2.reshape(-1,2))
                 img_area = w * h
                 area_ratio = area / img_area
 
                 print(f"  board area ratio = {area_ratio:.3f}")
 
-                if area_ratio < 0.0025:
-                    print("  ❌ Rejected: board too small/far")
+                if area_ratio < 0.0025: #empirical threshold
+                    print("Rejected: board too small/far")
                     continue
                 
-
-                # ==============================
-                # ACCEPT FRAME
-                # ==============================
-                print("  ✅ Accepted")
+                # if frame is fine
+                print("Accepted")
 
                 auto_objectPoints[f"cam{cameraNumber}"].append(board_object_points)
                 auto_imagePoints[f"cam{cameraNumber}"].append(corners2)
@@ -316,7 +303,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 cv.waitKey(500)
                 crns[f"frame_{i}_{video_path[10:-5]}"] = corners2
 
-            # case 2: partial localization of corners -> Convex Hull technique (Choice task 1)
+            # case 2: partial localization of corners -> Choice task 1 - Convex Hull technique
             elif corners is not None and len(corners) >= MIN_POINTS:
 
                 pts = corners.reshape(-1,2).astype(np.float32)
@@ -328,7 +315,6 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 # enforce order
                 ordered = order_points(src, pattern_size = pattern_size)
                 ordered_ref = ordered.reshape(-1, 1, 2).astype(np.float32)
-                #cv.cornerSubPix(gray, ordered_ref, (11,11), (-1,-1), criteria)
                 ordered_refined = ordered_ref.reshape(4, 2)
 
                 dst = np.float32([
@@ -356,7 +342,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 img_points = img_grid.reshape(-1, 2)
                 print("Using convex hull fallback")
 
-                # --- Visualization for convex hull fallback ---
+                # Visualization for convex hull fallback
                 frame_hull = frame.copy()
 
                 # draw convex hull in green
@@ -421,7 +407,6 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 cv.cornerSubPix(gray, ordered_ref, (11,11), (-1,-1), criteria)
                 ordered_refined = ordered_ref.reshape(4, 2)
 
-                #dst = np.float32([[0, 0], [W-1, 0], [W-1, H-1], [0, H-1]]) # the corners
                 dst = np.float32([
                     top_left,
                     top_right,
@@ -479,6 +464,9 @@ def create_object_points(cols, rows, square_size_mm = EDGE_SIZE):
     return np.array(objp, dtype=np.float32)
 
 def save_camera_config_xml(filename, K, dist, rvec=None, tvec=None):
+    """
+    Save the camera configuration at the end of calibration in an xml file
+    """
     fs = cv.FileStorage(filename, cv.FILE_STORAGE_WRITE)
 
     fs.write("CameraMatrix", K.astype(np.float32))
@@ -491,7 +479,7 @@ def save_camera_config_xml(filename, K, dist, rvec=None, tvec=None):
 
     fs.release()
 
-# functions for improved camera calibration (choice task 7)
+# functions for improved camera calibration (Choice task 7)
 def reproj_error(objp, imgp, rvec, tvec, K, dist):
     proj, _ = cv.projectPoints(objp, rvec, tvec, K, dist)
     return np.mean(np.linalg.norm(proj.reshape(-1,2) - imgp.reshape(-1,2), axis=1))
@@ -510,25 +498,18 @@ def calibrate_with_reprojection_filter(objectPoints,
         cameraMatrix, distCoeffs, rvecs, tvecs
     """
 
-    # -------------------------
-    # First calibration
-    # -------------------------
+    # standard calibration
     ret, K, dist, rvecs, tvecs = cv.calibrateCamera(
         objectPoints, imagePoints, image_size, None, None,
         flags=0, criteria=criteria
     )
-
-    if verbose:
-        print("\n=== Per-frame reprojection errors ===")
+    print("\n=== Per-frame reprojection errors ===")
 
     good_obj = []
     good_img = []
-
     errors = []
 
-    # -------------------------
-    # Compute reprojection error per frame
-    # -------------------------
+    # reprojection error per frame
     for idx, (objp, imgp, rvec, tvec) in enumerate(zip(objectPoints, imagePoints, rvecs, tvecs)):
 
         proj, _ = cv.projectPoints(objp, rvec, tvec, K, dist)
@@ -539,41 +520,29 @@ def calibrate_with_reprojection_filter(objectPoints,
                 axis=1
             )
         )
-
         errors.append(err)
 
         if verbose:
-            print(f"Frame {idx:02d} → error = {err:.3f}px")
+            print(f"Frame {idx:02d} → error = {err:.3f}px") #print errors per frmae
 
         if err < threshold:
             good_obj.append(objp)
             good_img.append(imgp)
         else:
             if verbose:
-                print("   ❌ rejected")
+                print("Rejected")
 
-    # -------------------------
-    # If nothing rejected, skip recalibration
-    # -------------------------
+    # if no frame gets rejected, no need for calibrating again
     if len(good_obj) == len(objectPoints):
         if verbose:
             print("\nNo frames rejected.")
         return K, dist, rvecs, tvecs
-
-    # -------------------------
-    # Recalibrate with good frames only
-    # -------------------------
-    if verbose:
-        print(f"\nRecalibrating with {len(good_obj)}/{len(objectPoints)} good frames...")
-
+    
+    # otherwise recalibrate using the good frames
     ret, K, dist, rvecs, tvecs = cv.calibrateCamera(
         good_obj, good_img, image_size, None, None,
         flags=0, criteria=criteria
     )
-
-    if verbose:
-        print("Done.\n")
-
     return K, dist, rvecs, tvecs
 
 
@@ -1433,11 +1402,7 @@ if __name__ == "__main__":
 
 def voxels_to_volume(voxels, voxel_size= block_size, padding=1):
     """
-    Convert world-coordinate voxels into a 3d grid
-    
-    voxels: (N,3) float array
-    voxel_size: distance between voxel centers
-    padding: number of empty voxels to pad around
+    world-coordinate voxels -> 3d grid
     
     ret:
         volume 3d numpy arr
@@ -1446,7 +1411,6 @@ def voxels_to_volume(voxels, voxel_size= block_size, padding=1):
     # Compute bounds
     min_coord = voxels.min(axis=0) - padding * voxel_size
     max_coord = voxels.max(axis=0) + padding * voxel_size
-    
     dims = np.ceil((max_coord - min_coord) / voxel_size).astype(int) + 1
     volume = np.zeros(dims, dtype=np.uint8)
     
@@ -1458,7 +1422,7 @@ def voxels_to_volume(voxels, voxel_size= block_size, padding=1):
 
 def volume_to_mesh(volume, voxel_size=2.0, origin=np.array([0,0,0])):
     """
-    Convert 3D grid to vertices + faces using MarchingCubes
+    3d grid -> vertices + faces (using MarchingCubes)
     """
     verts, faces, normals, values = measure.marching_cubes(volume, level=0.5)
     
@@ -1470,7 +1434,6 @@ def volume_to_mesh(volume, voxel_size=2.0, origin=np.array([0,0,0])):
 def save_mesh_obj(filename, verts, faces):
     """
     Save mesh as a wavefront obj
-    faces must be triangular
     """
     with open(filename, "w") as f:
         f.write("# OBJ file generated from voxel marching cubes\n")
@@ -1486,11 +1449,7 @@ def save_mesh_obj(filename, verts, faces):
 positions, colors = set_voxel_positions()
 voxels_np = np.array(positions)
 
-# 4.1 convert voxels to 3D volume
+# voxels -> 3d volume -> mesh -> obj
 volume, origin = voxels_to_volume(voxels_np, voxel_size=2.0, padding=1)
-
-# 4.2 extract mesh
 verts, faces = volume_to_mesh(volume, voxel_size=2.0, origin=origin)
-
-# 4.3 Save wavefront mesh
 save_mesh_obj("mesh.obj", verts, faces)
