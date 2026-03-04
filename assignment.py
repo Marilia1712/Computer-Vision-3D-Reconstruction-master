@@ -207,8 +207,10 @@ def interpolate_corners(points, cols, rows):
 
 
 """
-    Task 1 + Choice Task 7
+    Task 1 + Choice Task 7: (improved) calibration
 """
+
+MIN_POINTS = (pattern_size[0]*pattern_size[1]) // 4
 
 # functions for camera calibration
 def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number = 50):
@@ -246,6 +248,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
             # Find the chess board corners
             ret, corners = cv.findChessboardCorners(gray, (pattern_size[0],pattern_size[1]), None)
 
+            # case 1: full, straighforward localization of corners
             if ret == True:
                 print(f"\nFrame {i}: chessboard detected")
 
@@ -314,7 +317,47 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 cv.imshow('img', frame)
                 cv.waitKey(500)
                 crns[f"frame_{i}_{video_path[10:-5]}"] = corners2
+
+            # partial localization of corners -> convex hull technique
+            elif corners is not None and len(corners) >= MIN_POINTS:
+
+                pts = corners.reshape(-1,2).astype(np.float32)
+                hull = cv.convexHull(pts)
+                rect = cv.minAreaRect(hull)
+                box  = cv.boxPoints(rect)
+                src = np.array(box, dtype=np.float32)
+
+                # enforce order
+                ordered = order_points(src, pattern_size = pattern_size)
+                ordered_ref = ordered.reshape(-1, 1, 2).astype(np.float32)
+                cv.cornerSubPix(gray, ordered_ref, (11,11), (-1,-1), criteria)
+                ordered_refined = ordered_ref.reshape(4, 2)
+
+                dst = np.float32([
+                    top_left,
+                    top_right,
+                    bottom_right,
+                    bottom_left
+                ])
+                W = (pattern_size[0] - 1) * 100
+                H = (pattern_size[1] - 1) * 100
                 
+                #warping for better corner estimation
+                H_warp = cv.getPerspectiveTransform(ordered_refined, dst)
+                warped = cv.warpPerspective(img, H_warp, (W, H))
+                gray_warped = cv.cvtColor(warped, cv.COLOR_BGR2GRAY)
+
+                # interpolation
+                warped_grid = interpolate_corners(dst, pattern_size[0], pattern_size[1])
+                warped_grid = warped_grid.reshape(-1, 1, 2).astype(np.float32)
+
+                # inverse warping to go back to original image
+                H_inv = cv.getPerspectiveTransform(dst, ordered_refined)
+                img_grid = cv.perspectiveTransform(warped_grid, H_inv)
+
+                img_points = img_grid.reshape(-1, 2)
+                print("Using convex hull fallback")
+
             else:
                 #cv.imwrite(f'{dest_manual}/frame_{i}_{video_path[11:-5]}.jpg', frame)
             
@@ -353,11 +396,8 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
 
                 src = np.array(state['2dpoints'], dtype=np.float32)
 
-                # --------------- Enforce order -----------------#
-
-                src = np.array(state['2dpoints'], dtype = np.float32)
+                # enforce order 
                 ordered = order_points(src, pattern_size = pattern_size)
-                
                 ordered_ref = ordered.reshape(-1, 1, 2).astype(np.float32)
                 cv.cornerSubPix(gray, ordered_ref, (11,11), (-1,-1), criteria)
                 ordered_refined = ordered_ref.reshape(4, 2)
@@ -372,7 +412,7 @@ def calibrate_camera(cameraNumber, video_path, dest, dest_manual, frame_number =
                 W = (pattern_size[0] - 1) * 100
                 H = (pattern_size[1] - 1) * 100
                 
-                #warping for better corner estimation
+                # warping for better corner estimation
                 H_warp = cv.getPerspectiveTransform(ordered_refined, dst)
                 warped = cv.warpPerspective(img, H_warp, (W, H))
                 gray_warped = cv.cvtColor(warped, cv.COLOR_BGR2GRAY)
@@ -589,7 +629,7 @@ for cameraNumber in range(1, 5):
 #################################################################################################################################
 """
 """
-    Task 2
+    Task 2: Background Subtraction
 """
 
 def background_detection(video_path):
@@ -686,21 +726,14 @@ for i in range(1,5):
 #################################################################################################################################
 """
 """
-    Task 3
+    Task 3: Voxel Reconstruction
 
 """
 
 # Get camera position (adaptation of code from Assingnment 1)
 
-cam_pos = {}
-cam_orient = {}
-cam_R = {}
-
-rvecs = {}
-tvecs = {}
-cam_matrix = {}
-dist_coeff = {}
-params = {}
+cam_pos, cam_orient, cam_R = {}, {}, {}
+rvecs, tvecs, cam_matrix, dist_coeff, params = {}, {}, {}, {}, {}
 
 for i in range(1, 5):
 
@@ -733,7 +766,6 @@ for i in range(1, 5):
 
     #Store params for each camera
     params[f'cam{i}'] = [camera_matrix, dist, rvec, tvec]
-
 
 def generate_voxel_grid():
     ranges = [(-50,50), (0,150), (-50,50)]
